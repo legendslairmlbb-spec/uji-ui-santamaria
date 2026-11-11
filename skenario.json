@@ -1,0 +1,31 @@
+{
+  "_catatan": "Daftar sesi uji untuk perintah 'semua' dan workflow n8n (nomor skenario dimulai dari 0). Ubah 'tujuan' sesuka hati; 'peran' harus ada di akun.json. Pengaturan di sini berlaku untuk semua skenario, kecuali ditimpa di skenario itu sendiri.",
+  "pengaturan": {
+    "ambang_yakin": 0.75,
+    "maks_putaran": 3,
+    "rekam": true,
+    "boleh_ubah_data": false
+  },
+  "skenario": [
+    {
+      "aplikasi": "santamaria",
+      "peran": "owner",
+      "tujuan": "Aplikasi Santa Maria (layanan kedukaan), peran owner/pemilik. Evaluasi beranda/dashboard dan menu utama yang dipakai pemilik untuk memantau operasional: aksesibilitas, waktu respons tiap menu, kerumitan tampilan, dan konsistensi navigasi. Jangan mengubah data."
+    },
+    {
+      "aplikasi": "santamaria",
+      "peran": "consumer",
+      "tujuan": "Aplikasi Santa Maria, peran konsumen (keluarga yang memakai layanan, bisa jadi lanjut usia dan sedang berduka). Evaluasi seberapa mudah konsumen memahami layanan dan menemukan informasi penting: aksesibilitas (teks besar, kontras, ukuran tombol), kejelasan istilah, umpan balik saat memuat, dan waktu respons. Jangan mengubah data."
+    },
+    {
+      "aplikasi": "yayasan",
+      "peran": "yayasan_admin",
+      "tujuan": "Aplikasi Yayasan Santa Maria, peran admin yayasan. Evaluasi menu utama admin: aksesibilitas, waktu respons, kepadatan informasi pada daftar/tabel, dan konsistensi navigasi. Jangan mengubah data."
+    },
+    {
+      "aplikasi": "wasiat",
+      "peran": "pengguna_google",
+      "tujuan": "Aplikasi Wasiat (login dengan akun Google). Evaluasi alur masuk dengan Google, beranda, dan menu utama: aksesibilitas, waktu respons, kerumitan tampilan, dan kejelasan alur. Jangan mengubah data."
+    }
+  ]
+}

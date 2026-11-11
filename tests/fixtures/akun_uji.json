@@ -1,0 +1,143 @@
+{
+  "_catatan": "Data palsu untuk tests/ (simulator). Bukan akun sungguhan.",
+  "password_default": "SandiUji#0000",
+  "aplikasi": {
+    "santamaria": {
+      "nama": "Santa Maria",
+      "package": "id.co.santamaria.app",
+      "activity": "com.santamaria.frontend.MainActivity",
+      "login_pakai": "email",
+      "tab_login_default": "Personel",
+      "akun": {
+        "admin": {
+          "email": "dummy.admin@contoh.test",
+          "hp": "080000000001"
+        },
+        "admin_gudang": {
+          "email": "dummy.admin.gudang@contoh.test",
+          "hp": "080000000002"
+        },
+        "admin_lapangan": {
+          "email": "dummy.admin.lapangan@contoh.test",
+          "hp": "080000000003"
+        },
+        "akuntansi": {
+          "email": "dummy.akuntansi@contoh.test",
+          "hp": "080000000004"
+        },
+        "consumer": {
+          "email": "dummy.consumer@contoh.test",
+          "hp": "080000000005",
+          "tab_login": "Konsumen"
+        },
+        "dekor": {
+          "email": "dummy.dekor@contoh.test",
+          "hp": "080000000006"
+        },
+        "driver": {
+          "email": "dummy.driver@contoh.test",
+          "hp": "080000000007"
+        },
+        "gudang": {
+          "email": "dummy.gudang@contoh.test",
+          "hp": "080000000008"
+        },
+        "hrd": {
+          "email": "dummy.hrd@contoh.test",
+          "hp": "080000000009"
+        },
+        "kepala_divisi_driver": {
+          "email": "dummy.kepala.divisi.driver@contoh.test",
+          "hp": "080000000010"
+        },
+        "kepala_divisi_gudang": {
+          "email": "dummy.kepala.divisi.gudang@contoh.test",
+          "hp": "080000000011"
+        },
+        "kepala_security": {
+          "email": "dummy.kepala.security@contoh.test",
+          "hp": "080000000012"
+        },
+        "musisi": {
+          "email": "dummy.musisi@contoh.test",
+          "hp": "080000000013"
+        },
+        "ob": {
+          "email": "dummy.ob@contoh.test",
+          "hp": "080000000014"
+        },
+        "owner": {
+          "email": "dummy.owner@contoh.test",
+          "hp": "080000000015"
+        },
+        "pemandi_jenazah": {
+          "email": "dummy.pemandi.jenazah@contoh.test",
+          "hp": "080000000016"
+        },
+        "petugas_akta": {
+          "email": "dummy.petugas.akta@contoh.test",
+          "hp": "080000000017"
+        },
+        "purchasing": {
+          "email": "dummy.purchasing@contoh.test",
+          "hp": "080000000018"
+        },
+        "security": {
+          "email": "dummy.security@contoh.test",
+          "hp": "080000000019"
+        }
+      }
+    },
+    "yayasan": {
+      "nama": "Yayasan Santa Maria",
+      "package": "id.co.santamaria.yayasan",
+      "activity": "com.santamaria.frontend.MainActivity",
+      "login_pakai": "email",
+      "_catatan": "Semua akun Yayasan (termasuk owner). Asumsi: 'yayasansm' adalah isian tambahan di form login (misalnya kode yayasan); skrip hanya mengisinya kalau form punya kolom berlabel kode/organisasi/instansi. Kalau ternyata itu kata sandi, tambahkan \"password\": \"yayasansm\" pada akun yang bersangkutan.",
+      "akun": {
+        "owner": {
+          "email": "dummy.owner@contoh.test",
+          "kode": "kodeuji"
+        },
+        "kepala_keanggotaan": {
+          "email": "dummy.kepala.keanggotaan@contoh.test",
+          "hp": "080000000020",
+          "kode": "kodeuji"
+        },
+        "asisten_kepala_keanggotaan": {
+          "email": "dummy.asisten.kepala.keanggotaan@contoh.test",
+          "hp": "080000000021",
+          "kode": "kodeuji"
+        },
+        "yayasan_admin": {
+          "email": "dummy.yayasan.admin@contoh.test",
+          "hp": "080000000022",
+          "kode": "kodeuji"
+        },
+        "yayasan_akuntansi": {
+          "email": "dummy.yayasan.akuntansi@contoh.test",
+          "hp": "080000000023",
+          "kode": "kodeuji"
+        },
+        "yayasan_marketing": {
+          "email": "dummy.yayasan.marketing@contoh.test",
+          "hp": "080000000024",
+          "kode": "kodeuji"
+        }
+      }
+    },
+    "wasiat": {
+      "nama": "Wasiat",
+      "package": "id.co.santamaria.wasiat",
+      "activity": "id.co.santamaria.wasiat.MainActivity",
+      "login_metode": "google_sso",
+      "label_tombol_sso": "Google",
+      "_catatan": "Login lewat Google SSO: akun Google harus sudah masuk di HP (Setelan > Akun). Isi google_akun dengan email akun Google uji yang dipilih di pemilih akun; kosong = akun pertama di daftar. Kalau tombol login bukan berlabel '...Google...', ubah label_tombol_sso. Layar Google tidak pernah disimpan sebagai bukti atau dikirim ke LLM.",
+      "akun": {
+        "pengguna_google": {
+          "google_akun": ""
+        }
+      }
+    }
+  }
+}

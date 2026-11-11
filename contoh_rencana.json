@@ -1,0 +1,11 @@
+{
+  "aplikasi": "santamaria",
+  "judul": "login_owner_lihat_beranda",
+  "tujuan": "Aksesibilitas dan waktu respons alur login owner sampai beranda",
+  "langkah": [
+    {"aksi": "buka_aplikasi", "nama": "buka_aplikasi"},
+    {"aksi": "login", "nama": "login_owner", "peran": "owner"},
+    {"aksi": "gulir", "nama": "gulir_beranda", "arah": "bawah"},
+    {"aksi": "tangkap", "nama": "beranda_bawah"}
+  ]
+}

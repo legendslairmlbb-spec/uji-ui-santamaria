@@ -1,0 +1,143 @@
+{
+  "_catatan": "Salin file ini menjadi akun.json lalu isi email/HP/kata sandi akun uji. akun.json tidak ikut di-commit (.gitignore). LLM hanya melihat nama peran, tidak pernah email atau kata sandi.",
+  "password_default": "",
+  "aplikasi": {
+    "santamaria": {
+      "nama": "Santa Maria",
+      "package": "id.co.santamaria.app",
+      "activity": "com.santamaria.frontend.MainActivity",
+      "login_pakai": "email",
+      "tab_login_default": "Personel",
+      "akun": {
+        "admin": {
+          "email": "",
+          "hp": ""
+        },
+        "admin_gudang": {
+          "email": "",
+          "hp": ""
+        },
+        "admin_lapangan": {
+          "email": "",
+          "hp": ""
+        },
+        "akuntansi": {
+          "email": "",
+          "hp": ""
+        },
+        "consumer": {
+          "email": "",
+          "hp": "",
+          "tab_login": "Konsumen"
+        },
+        "dekor": {
+          "email": "",
+          "hp": ""
+        },
+        "driver": {
+          "email": "",
+          "hp": ""
+        },
+        "gudang": {
+          "email": "",
+          "hp": ""
+        },
+        "hrd": {
+          "email": "",
+          "hp": ""
+        },
+        "kepala_divisi_driver": {
+          "email": "",
+          "hp": ""
+        },
+        "kepala_divisi_gudang": {
+          "email": "",
+          "hp": ""
+        },
+        "kepala_security": {
+          "email": "",
+          "hp": ""
+        },
+        "musisi": {
+          "email": "",
+          "hp": ""
+        },
+        "ob": {
+          "email": "",
+          "hp": ""
+        },
+        "owner": {
+          "email": "",
+          "hp": ""
+        },
+        "pemandi_jenazah": {
+          "email": "",
+          "hp": ""
+        },
+        "petugas_akta": {
+          "email": "",
+          "hp": ""
+        },
+        "purchasing": {
+          "email": "",
+          "hp": ""
+        },
+        "security": {
+          "email": "",
+          "hp": ""
+        }
+      }
+    },
+    "yayasan": {
+      "nama": "Yayasan Santa Maria",
+      "package": "id.co.santamaria.yayasan",
+      "activity": "com.santamaria.frontend.MainActivity",
+      "login_pakai": "email",
+      "_catatan": "Semua akun Yayasan (termasuk owner). Asumsi: 'yayasansm' adalah isian tambahan di form login (misalnya kode yayasan); skrip hanya mengisinya kalau form punya kolom berlabel kode/organisasi/instansi. Kalau ternyata itu kata sandi, tambahkan \"password\": \"yayasansm\" pada akun yang bersangkutan.",
+      "akun": {
+        "owner": {
+          "email": "",
+          "kode": ""
+        },
+        "kepala_keanggotaan": {
+          "email": "",
+          "hp": "",
+          "kode": ""
+        },
+        "asisten_kepala_keanggotaan": {
+          "email": "",
+          "hp": "",
+          "kode": ""
+        },
+        "yayasan_admin": {
+          "email": "",
+          "hp": "",
+          "kode": ""
+        },
+        "yayasan_akuntansi": {
+          "email": "",
+          "hp": "",
+          "kode": ""
+        },
+        "yayasan_marketing": {
+          "email": "",
+          "hp": "",
+          "kode": ""
+        }
+      }
+    },
+    "wasiat": {
+      "nama": "Wasiat",
+      "package": "id.co.santamaria.wasiat",
+      "activity": "id.co.santamaria.wasiat.MainActivity",
+      "login_metode": "google_sso",
+      "label_tombol_sso": "Google",
+      "_catatan": "Login lewat Google SSO: akun Google harus sudah masuk di HP (Setelan > Akun). Isi google_akun dengan email akun Google uji yang dipilih di pemilih akun; kosong = akun pertama di daftar. Kalau tombol login bukan berlabel '...Google...', ubah label_tombol_sso. Layar Google tidak pernah disimpan sebagai bukti atau dikirim ke LLM.",
+      "akun": {
+        "pengguna_google": {
+          "google_akun": ""
+        }
+      }
+    }
+  }
+}

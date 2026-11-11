@@ -1,0 +1,20 @@
+# Rahasia: berisi kata sandi akun uji dan API key LLM
+akun.json
+llm.json
+akun_*.json
+!tests/fixtures/akun_uji.json
+
+# Hasil uji & cache
+__pycache__/
+*.pyc
+status_login.json
+sesi_*/
+ringkasan_*.html
+ringkasan_*.md
+*.mp4
+
+# Lingkungan
+.venv/
+venv/
+.idea/
+.vscode/

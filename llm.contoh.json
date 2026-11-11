@@ -1,0 +1,15 @@
+{
+  "_catatan": "Salin menjadi llm.json lalu isi api_key dari dashboard 9router (atau set env UJI_LLM_KEY). llm.json tidak ikut di-commit. model_cadangan dipakai otomatis kalau model utama gagal/kena limit.",
+  "base_url": "http://localhost:20128/v1",
+  "api_key": "",
+  "model_perancang": "gemini/gemini-3.6-flash",
+  "model_evaluator": "gemini/gemini-3.6-flash",
+  "model_cadangan": "gemini/gemini-3.5-flash-lite",
+  "reasoning_effort_perancang": "low",
+  "reasoning_effort_evaluator": "medium",
+  "temperature": 0.2,
+  "timeout_detik": 240,
+  "maks_coba": 4,
+  "kirim_gambar": true,
+  "maks_gambar_evaluator": 14
+}

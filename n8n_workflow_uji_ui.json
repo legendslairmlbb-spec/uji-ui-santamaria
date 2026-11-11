@@ -1,0 +1,396 @@
+{
+  "name": "Uji UI/UX - LLM Perancang & Evaluator (3 aplikasi)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Uji UI/UX otomatis: LLM Perancang + Pelaksana + LLM Evaluator\nUntuk tiap skenario di **skenario.json**: observasi awal di HP -> **LLM Perancang** menyusun rencana -> **Pelaksana** (Appium) menjalankannya -> **LLM Evaluator** menilai. Kalau keyakinan evaluator di bawah ambang, evaluator menulis permintaan uji ulang dan alurnya kembali ke LLM Perancang (maks. putaran di skenario.json). Setelah yakin, laporan dibuat; di akhir ada ringkasan semua aplikasi.\n\n**Sebelum Execute workflow:** 9router jalan, `appium` jalan di terminal lain (Inspector ditutup), HP tersambung (`adb devices`), dan n8n dijalankan dengan `$env:NODES_EXCLUDE='[]'` supaya node Execute Command aktif. Ubah lokasi Python/skrip di node **Konfigurasi**.\n\nHasil: `C:\\Users\\<kamu>\\.n8n-files\\uji-ui\\sesi_.../laporan.html`. Satu skenario bisa 5-20 menit.",
+        "height": 300,
+        "width": 760,
+        "color": 7
+      },
+      "id": "2ca8d8f7-ebca-552b-9590-23d9ee069564",
+      "name": "Catatan",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -240
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "649dba3e-2b98-51ef-92c4-6ca1157627ab",
+      "name": "Mulai manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "01b44ea9-aa6a-5f1e-b04d-db057024a2e2",
+              "name": "python",
+              "value": "python",
+              "type": "string"
+            },
+            {
+              "id": "7a98c066-f3c6-522e-8ccc-0577bf131fa7",
+              "name": "skrip",
+              "value": "%USERPROFILE%\\uji-ui\\orkestrator.py",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3f78aa73-97bd-529f-b7c2-ce383c198efb",
+      "name": "Konfigurasi",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "={{ $('Konfigurasi').first().json.python }} \"{{ $('Konfigurasi').first().json.skrip }}\" daftar-skenario"
+      },
+      "id": "32d756d5-775b-5047-8b77-43c996c4c763",
+      "name": "Daftar skenario",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Satu item per skenario dari skenario.json.\n// Untuk menjalankan sebagian saja, misalnya: .filter(s => [0, 2].includes(s.no))\nconst hasil = JSON.parse($input.first().json.stdout.trim().split('\\n').pop());\nreturn hasil.skenario\n  .map(s => ({ json: { no: s.no, aplikasi: s.aplikasi, peran: s.peran, tujuan: s.tujuan } }));\n"
+      },
+      "id": "34f14219-bf76-51ea-8cbd-be94143715aa",
+      "name": "Pecah per skenario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "46ad58e0-add4-59b0-8936-7575e6bcb056",
+      "name": "Per skenario",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "={{ $('Konfigurasi').first().json.python }} \"{{ $('Konfigurasi').first().json.skrip }}\" mulai --skenario {{ $json.no }}"
+      },
+      "id": "63263f60-f5a1-5253-b657-6af708761884",
+      "name": "Mulai sesi + observasi (HP)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        420
+      ],
+      "notes": "buka aplikasi, login, tangkap layar awal",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "={{ $('Konfigurasi').first().json.python }} \"{{ $('Konfigurasi').first().json.skrip }}\" rancang --sesi \"{{ JSON.parse($json.stdout.trim().split('\\n').pop()).sesi }}\""
+      },
+      "id": "a04f1688-1a91-596d-ae2a-691d405b469c",
+      "name": "LLM Perancang",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        420
+      ],
+      "notes": "menyusun rencana uji (JSON)",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "={{ $('Konfigurasi').first().json.python }} \"{{ $('Konfigurasi').first().json.skrip }}\" jalankan --sesi \"{{ JSON.parse($json.stdout.trim().split('\\n').pop()).sesi }}\""
+      },
+      "id": "eb00ef15-6cf9-5a88-81e7-c55b6c8b8d47",
+      "name": "Pelaksana (Appium di HP)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        420
+      ],
+      "notes": "menjalankan rencana, ukur waktu & metrik",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "={{ $('Konfigurasi').first().json.python }} \"{{ $('Konfigurasi').first().json.skrip }}\" evaluasi --sesi \"{{ JSON.parse($json.stdout.trim().split('\\n').pop()).sesi }}\""
+      },
+      "id": "2f1d58dd-ccc0-52be-9ff7-dcea0ef5f3cc",
+      "name": "LLM Evaluator",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        420
+      ],
+      "notes": "menilai, menentukan yakin/uji ulang",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2f3636fe-f657-5466-99d1-a0784226be7f",
+              "leftValue": "={{ JSON.parse($json.stdout.trim().split('\\n').pop()).lanjut }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2069e827-e084-5aa0-aed2-5d403472b3cc",
+      "name": "Perlu uji ulang?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "={{ $('Konfigurasi').first().json.python }} \"{{ $('Konfigurasi').first().json.skrip }}\" laporan --sesi \"{{ JSON.parse($json.stdout.trim().split('\\n').pop()).sesi }}\""
+      },
+      "id": "ebb4de7e-f09f-5eee-8545-d41a46b795ab",
+      "name": "Buat laporan",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        560
+      ],
+      "notes": "laporan.html / .md / .json",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "executeOnce": true,
+        "command": "={{ $('Konfigurasi').first().json.python }} \"{{ $('Konfigurasi').first().json.skrip }}\" ringkasan --sesi {{ $input.all().map(i => '\"' + JSON.parse(i.json.stdout.trim().split('\\n').pop()).sesi + '\"').join(' ') }}"
+      },
+      "id": "5f01581c-d931-5938-b706-bf732c2293fb",
+      "name": "Ringkasan semua aplikasi",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = JSON.parse($input.first().json.stdout.trim().split('\\n').pop());\nreturn [{ json: { ringkasan_html: r.ringkasan_html, ringkasan_md: r.ringkasan_md, jumlah_sesi: r.jumlah_sesi } }];\n"
+      },
+      "id": "4db3ca74-10fa-5c6a-8de8-5521aa51e00e",
+      "name": "Hasil akhir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        140
+      ]
+    }
+  ],
+  "connections": {
+    "Mulai manual": {
+      "main": [
+        [
+          {
+            "node": "Konfigurasi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Konfigurasi": {
+      "main": [
+        [
+          {
+            "node": "Daftar skenario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daftar skenario": {
+      "main": [
+        [
+          {
+            "node": "Pecah per skenario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pecah per skenario": {
+      "main": [
+        [
+          {
+            "node": "Per skenario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Per skenario": {
+      "main": [
+        [
+          {
+            "node": "Ringkasan semua aplikasi",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mulai sesi + observasi (HP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mulai sesi + observasi (HP)": {
+      "main": [
+        [
+          {
+            "node": "LLM Perancang",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Perancang": {
+      "main": [
+        [
+          {
+            "node": "Pelaksana (Appium di HP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pelaksana (Appium di HP)": {
+      "main": [
+        [
+          {
+            "node": "LLM Evaluator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Evaluator": {
+      "main": [
+        [
+          {
+            "node": "Perlu uji ulang?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perlu uji ulang?": {
+      "main": [
+        [
+          {
+            "node": "LLM Perancang",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buat laporan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buat laporan": {
+      "main": [
+        [
+          {
+            "node": "Per skenario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ringkasan semua aplikasi": {
+      "main": [
+        [
+          {
+            "node": "Hasil akhir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false,
+  "id": "UjiUiPerancangEval"
+}
