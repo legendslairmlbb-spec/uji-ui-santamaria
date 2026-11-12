@@ -12,7 +12,7 @@ TMP = tempfile.mkdtemp(prefix="orkes_")
 os.environ["UJI_UI_FOLDER"] = TMP
 AKAR = Path(__file__).resolve().parent.parent
 os.environ["UJI_UI_AKUN"] = str(AKAR / "tests" / "fixtures" / "akun_uji.json")
-os.environ["UJI_UI_SKENARIO"] = str(AKAR / "skenario.json")
+os.environ["UJI_UI_SKENARIO"] = str(AKAR / "tests" / "fixtures" / "skenario_uji.json")
 sys.path.insert(0, str(AKAR))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mock_llm  # noqa: E402
@@ -86,7 +86,8 @@ cek(any(x["jumlah_tanpa_label"] >= 1 and x["jumlah_target_kecil"] >= 1 for x in 
 html_lap = (sesi / "laporan.html").read_text(encoding="utf-8")
 cek(html_lap.count("data:image/jpeg;base64,") >= 3 and "Ikon pojok kanan atas tanpa label" in html_lap, "HTML + gambar")
 md = (sesi / "laporan.md").read_text(encoding="utf-8")
-cek("## Temuan dan rekomendasi" in md and "putaran_" not in md.split("## Temuan")[0], "markdown")
+cek("## Aksesibilitas" in md and "## Performa" in md and "## Cakupan fitur" in md and "## Log error aplikasi" in md
+    and "putaran_" not in md.split("## Aksesibilitas")[0], "markdown: temuan dikelompokkan per jenis")
 frame = list((sesi / "putaran_2" / "frame").glob("*.jpg")) + list((sesi / "putaran_1" / "frame").glob("*.jpg"))
 cek(len(frame) >= 2 or not ork.ffmpeg(), f"frame rekaman langkah lambat harus diambil: {frame}")
 font = [p for p in SIM.panggilan if p[0] == "adb" and "font_scale" in p[1]]
@@ -211,7 +212,7 @@ cek(p2["lanjut"] is True and "mode jelajah menyeluruh" in p2["alasan_keputusan"]
     f"putaran 2 harus lanjut karena masih ada elemen belum dijelajah walau evaluator yakin: {p2}")
 cek("putaran maksimal (3)" in dj["putaran"][2]["alasan_keputusan"], f"putaran 3: {dj['putaran'][2]}")
 pr = [r["body"] for r in ST.permintaan[n0:] if "LLM PERANCANG UJI" in json.dumps(r["body"]["messages"][0])]
-cek("ELEMEN BELUM DIJELAJAH - mode jelajah menyeluruh AKTIF" in pr[-1]["messages"][1]["content"][0]["text"],
+cek("ELEMEN BELUM DIJELAJAH - jelajahi sebanyak mungkin" in pr[-1]["messages"][1]["content"][0]["text"],
     "perancang harus menerima daftar elemen yang belum dijelajah")
 lj = json.loads((sj / "laporan.json").read_text(encoding="utf-8"))
 ce = lj["cakupan_elemen"]
@@ -220,5 +221,47 @@ cek(ce["total"] > 0 and ce["sudah"] >= 1 and all(x["label"] != "Keluar" for x in
     f"cakupan elemen (tanpa tombol berisiko, form login, gerbang izin): {ce}")
 cek("Elemen yang bisa diklik:" in (sj / "laporan.md").read_text(encoding="utf-8"), "cakupan di laporan")
 print(f"11. jelajah menyeluruh: OK -> cakupan {ce['sudah']}/{ce['total']}, belum: {[x['label'] for x in ce['belum']][:6]}")
+
+# ---------------------------------------------------------------- 12. overtesting aplikasi demo: jelajah + CRUD + pemulihan
+cfg_demo = json.loads(Path(os.environ["UJI_UI_AKUN"]).read_text(encoding="utf-8"))
+cfg_demo["aplikasi"]["demo"] = {"nama": "Demo", "package": simulator.PKG_DEMO, "activity": ".MainActivity", "akun": {},
+                                "beri_izin_otomatis": False}
+F_DEMO = Path(TMP) / "akun_demo.json"
+F_DEMO.write_text(json.dumps(cfg_demo), encoding="utf-8")
+simulator.demo_reset()
+n0 = len(ST.permintaan)
+kode, h, err = cli("--akun", str(F_DEMO), "siklus", "--app", "demo", "--overtesting", "--izinkan-berisiko",
+                   "--maks-putaran", "4", "--tanpa-rekam")
+cek(kode == 0, f"siklus overtesting: {h}\n{err[-3000:]}")
+sd = Path(h["sesi"])
+dd = json.loads((sd / "sesi.json").read_text(encoding="utf-8"))
+jenis = [p["jenis"] for p in dd["putaran"]]
+cek(jenis == ["jelajah", "rencana", "pemulihan"], f"urutan putaran overtesting: {jenis} / {[p.get('alasan_keputusan') for p in dd['putaran']]}")
+cek(len(SIM.d_pesanan) == 6 and SIM.tema == "no" and SIM.pesawat is False and SIM.d_fingerprint is False,
+    f"data & pengaturan HP kembali seperti semula: {SIM.d_pesanan}")
+lap = json.loads((sd / "laporan.json").read_text(encoding="utf-8"))
+pd = lap["perubahan_data"]
+cek(pd and all(x["status_pulih"] in ("dipulihkan", "tidak_perlu") for x in pd), f"semua perubahan data dipulihkan: {pd}")
+cek(any(x["jenis"] == "crash" for x in lap["log_galat"]) and any(x["jenis"] == "galat_flutter" for x in lap["log_galat"]),
+    "log crash & galat Flutter masuk laporan")
+ce = lap["cakupan_elemen"]
+cek(ce["jumlah_layar"] >= 8 and ce["sudah"] >= 15 and not ce["belum"], f"cakupan overtesting: {ce}")
+cek(lap["daftar_uji"] and all(x["status"] != "belum" for x in lap["daftar_uji"]), f"daftar uji: {lap['daftar_uji']}")
+cek(lap["layar_di_luar_aplikasi"] and not any("Layar utama HP" in x["judul"] for x in lap["pengukuran"]["layar"]),
+    "layar utama HP (sesudah crash) tidak dihitung sebagai layar aplikasi")
+md = (sd / "laporan.md").read_text(encoding="utf-8")
+cek(all(x in md for x in ("## Bug, crash, dan data janggal", "*Langkah reproduksi:*", "## Perubahan data dan pemulihan",
+                          "## Cakupan fitur", "### Daftar uji mendalam")), "bagian laporan overtesting")
+req = [r["body"] for r in ST.permintaan[n0:]]
+teks_p = [" ".join(b.get("text", "") for b in r["messages"][1]["content"] if isinstance(b, dict)) for r in req
+          if "LLM PERANCANG UJI" in json.dumps(r["messages"][0])]
+teks_e = [" ".join(b.get("text", "") for b in r["messages"][1]["content"] if isinstance(b, dict)) for r in req
+          if "LLM EVALUATOR UI/UX" in json.dumps(r["messages"][0])]
+cek(len(teks_p) == 2 and "DAFTAR UJI MENDALAM" in teks_p[0] and "PENANDA DATA UJI SESI INI" in teks_p[0]
+    and "jenis putaran: pemulihan" in teks_p[1] and "UJI-" in teks_p[1], "isi prompt perancang overtesting")
+cek(teks_e and "PENJELAJAH OTOMATIS" in teks_e[0] and "LOG ERROR APLIKASI" in teks_e[0] and "PERUBAHAN DATA" in teks_e[1],
+    "isi prompt evaluator overtesting")
+print(f"12. overtesting demo: OK -> putaran {jenis}, cakupan {ce['sudah']}/{ce['total']} di {ce['jumlah_layar']} layar, "
+      f"{len(pd)} perubahan data dipulihkan")
 
 print(f"\nSEMUA {lulus} CEK LULUS (hasil di {TMP})")

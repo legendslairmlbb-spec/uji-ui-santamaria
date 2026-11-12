@@ -128,13 +128,18 @@ print("5. tap/kembali/koordinat: OK -> respon buka_laporan", r["langkah"][1]["re
 # ---------------------------------------------------------------- 6. langkah gagal
 rencana = {"aplikasi": "santamaria", "judul": "gagal", "langkah": [
     {"aksi": "tap", "nama": "menu_tidak_ada", "target": {"label": "Menu Rahasia"}, "batas_cari_detik": 1},
-    {"aksi": "tangkap", "nama": "tidak_boleh_jalan"}]}
+    {"aksi": "tangkap", "nama": "tetap_jalan"}]}
 kode, baris, err = jalankan_cli("jalankan", "-", stdin=json.dumps(rencana))
 h = json_terakhir(baris)
 cek(kode == 0 and h["status"] == "gagal_langkah" and h["langkah_gagal"]["langkah"] == "menu_tidak_ada",
     f"langkah gagal harus dilaporkan: {h}")
-cek(h["jumlah_langkah"] == 1 and h["langkah_gagal"]["screenshot"], "rencana berhenti dan bukti tersimpan")
-print("6. langkah gagal: OK ->", h["langkah_gagal"]["galat"])
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+cek(h["jumlah_langkah"] == 2 and h["jumlah_gagal"] == 1 and h["langkah_gagal"]["screenshot"]
+    and r["langkah"][-1]["langkah"] == "tetap_jalan", f"rencana lanjut setelah langkah gagal: {h}")
+rencana["langkah"][0]["berhenti_jika_gagal"] = True
+h = json_terakhir(jalankan_cli("jalankan", "-", stdin=json.dumps(rencana))[1])
+cek(h["jumlah_langkah"] == 1, f"berhenti_jika_gagal menghentikan rencana: {h}")
+print("6. langkah gagal tidak menghentikan rencana: OK ->", h["langkah_gagal"]["galat"])
 
 # ---------------------------------------------------------------- 7. tap berisiko ditolak saat validasi
 rencana = {"aplikasi": "santamaria", "langkah": [{"aksi": "tap", "target": {"label": "Keluar"}}]}
@@ -372,5 +377,117 @@ h = json_terakhir(baris)
 cek(h["aplikasi"]["yayasan"]["status"] == "tidak_terpasang" and h["aplikasi"]["wasiat"]["status"] == "ok"
     and "id.co.santamaria.yayasan tidak terpasang" in err, f"HP tersambung: hanya yang benar-benar belum dipasang: {h}")
 print("21. sambungan adb: OK -> kosong / unauthorized / offline / USB+Wi-Fi / dua HP / adb tidak ada")
+
+# ---------------------------------------------------------------- 22. penjelajah otomatis (aplikasi demo)
+cfg_demo = json.loads(Path(os.environ["UJI_UI_AKUN"]).read_text(encoding="utf-8"))
+cfg_demo["aplikasi"]["demo"] = {"nama": "Demo", "package": simulator.PKG_DEMO, "activity": ".MainActivity", "akun": {},
+                                "beri_izin_otomatis": False}
+F_DEMO = Path(TMP) / "akun_demo.json"
+F_DEMO.write_text(json.dumps(cfg_demo), encoding="utf-8")
+simulator.demo_reset()
+n0 = len(SIM.panggilan)
+kode, baris, err = jalankan_cli("--akun", str(F_DEMO), "jelajahi", "--app", "demo", "--batas-ketukan", "80")
+h = json_terakhir(baris)
+cek(kode == 0 and h["status"] == "selesai", f"jelajahi demo: {h}\n{err[-2000:]}")
+j = json.loads((Path(h["folder"]) / "jelajah.json").read_text(encoding="utf-8"))
+judul = " | ".join(L["judul"] for L in j["layar"])
+cek(len(j["layar"]) == 9 and all(x in judul for x in ("Notifikasi", "Tambah Pesanan", "Laporan Bulanan", "Pilih Nama",
+                                                       "Ubah Kata Sandi")), f"semua layar demo ditemukan: {judul}")
+st = {e["label"]: e for e in j["elemen"]}
+cek(st["Laporan Bulanan"]["status"] == "dijelajah", "menu di bawah bilah navigasi dijangkau dengan menggulir")
+cek(sum(1 for e in j["elemen"] if e["status"] == "diwakili") >= 4 and st["Pesanan #2"]["status"] == "dijelajah",
+    "daftar sejenis diwakili 2 contoh")
+cek(all(st[x]["status"] == "diblokir" for x in ("Simpan", "Hapus", "Selesaikan", "Keluar")), "tombol pengubah data diblokir")
+cek(st["Sinkronkan"]["hasil"] == "crash" and st["Muat ulang"]["hasil"] == "tanpa_perubahan", "crash + tap tanpa perubahan")
+baru = SIM.panggilan[n0:]
+cek(not any(x[0] == "tombol_sistem" for x in baru), "tidak boleh ada ketukan di bilah navigasi HP")
+cek(not any(x[0] in ("demo_hapus", "demo_buat", "demo_selesaikan", "demo_keluar", "demo_ganti_sandi") for x in baru),
+    "penjelajah tidak boleh mengubah data")
+cek(SIM.d_fingerprint is False and len(SIM.d_pesanan) == 6, "sakelar dikembalikan, data utuh")
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+log_lk = {g["jenis"] for l in r["langkah"] for g in l.get("log_galat") or []}
+janggal = {x["alasan"].split(":")[0] for l in r["langkah"] for x in (l.get("metrik") or {}).get("masalah", {}).get("teks_janggal", [])}
+dup = sum(len((l.get("metrik") or {}).get("masalah", {}).get("duplikat_klik", [])) for l in r["langkah"])
+cek({"crash", "galat_flutter"} <= log_lk and len(janggal) == 2 and dup >= 3, f"log={log_lk} janggal={janggal} D={dup}")
+cek(sum(1 for l in r["langkah"] if l.get("screenshot")) < len(r["langkah"]) / 2, "screenshot hanya untuk layar baru")
+print(f"22. penjelajah otomatis: OK -> {j['statistik']}")
+
+# ---------------------------------------------------------------- 23. ketukan aman: elemen di bawah bilah navigasi
+simulator.demo_reset()
+rencana = {"aplikasi": "demo", "judul": "laporan_bawah", "langkah": [
+    {"aksi": "buka_aplikasi", "nama": "buka"},
+    {"aksi": "tap", "nama": "buka_laporan_bulanan", "target": {"label": "Laporan Bulanan"},
+     "tunggu_muncul": {"label": "Laporan Bulanan", "kelas": "View"}}]}
+n0 = len(SIM.panggilan)
+kode, baris, err = jalankan_cli("--akun", str(F_DEMO), "jalankan", "-", stdin=json.dumps(rencana))
+h = json_terakhir(baris)
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+tap = r["langkah"][-1]
+cek(h["status"] == "selesai" and tap.get("digulir") and tap["titik_ketuk"][1] < simulator.NAV_Y
+    and not any(x[0] == "tombol_sistem" for x in SIM.panggilan[n0:]), f"gulir dulu lalu ketuk: {tap}\n{err[-1500:]}")
+print("23. ketukan aman (gulir dulu, bukan bilah navigasi): OK ->", tap["titik_ketuk"], "digulir", tap["digulir"])
+
+# ---------------------------------------------------------------- 24. CRUD dengan pemulihan + pengaman
+salah = ag.validasi_rencana({"aplikasi": "demo", "langkah": [
+    {"aksi": "tap", "target": {"label": "Simpan"}},
+    {"aksi": "tap", "target": {"label": "Kirim via WhatsApp"}, "ubah_data": "buat"},
+    {"aksi": "tap", "target": {"label": "Simpan"}, "ubah_data": "buat"}]}, cfg_demo, izinkan_berisiko=True)
+cek(any("tambahkan \"ubah_data\"" in x for x in salah) and any("selalu diblokir" in x for x in salah)
+    and any("pemulihan" in x for x in salah), f"validasi CRUD: {salah}")
+simulator.demo_reset()
+crud = {"aplikasi": "demo", "judul": "crud_pesanan", "langkah": [
+    {"aksi": "buka_aplikasi", "nama": "buka"},
+    {"aksi": "tap", "nama": "tambah", "target": {"label": "Tambah Pesanan"}},
+    {"aksi": "ketik", "nama": "isi_judul", "target": {"hint": "Judul pesanan"}, "teks": "Pesanan {penanda}"},
+    {"aksi": "tap", "nama": "simpan", "target": {"label": "Simpan"}, "ubah_data": "buat", "objek": "pesanan"},
+    {"aksi": "pastikan_ada", "nama": "pesanan_tampil", "target": {"label_mengandung": "{penanda}"}},
+    {"aksi": "tap", "nama": "buka_pesanan_lama", "target": {"label": "Pesanan #1"}},
+    {"aksi": "tap", "nama": "hapus_data_lama", "target": {"label": "Hapus"}, "ubah_data": "hapus", "objek": "pesanan lama"},
+    {"aksi": "kembali", "nama": "kembali_ke_dasbor"},
+    {"aksi": "tap", "nama": "tab_profil", "target": {"label": "Profil"}},
+    {"aksi": "tap", "nama": "sakelar_sidik_jari", "target": {"label": "Fingerprint"}},
+    {"aksi": "tap", "nama": "buka_ubah_sandi", "target": {"label": "Ubah kata sandi"}},
+    {"aksi": "tap", "nama": "simpan_sandi", "target": {"label": "Simpan"}, "ubah_data": "ubah", "objek": "kata sandi"},
+    {"aksi": "atur_tema", "nama": "tema_gelap", "tema": "gelap"},
+    {"aksi": "atur_jaringan", "nama": "tanpa_internet", "status": "mati"}],
+    "pemulihan": [
+    {"aksi": "buka_aplikasi", "nama": "buka_lagi"},
+    {"aksi": "tap", "nama": "buka_data_uji", "target": {"label_mengandung": "{penanda}"}},
+    {"aksi": "tap", "nama": "hapus_data_uji", "target": {"label": "Hapus"}, "ubah_data": "hapus", "objek": "pesanan"},
+    {"aksi": "pastikan_tidak_ada", "nama": "data_uji_hilang", "target": {"label_mengandung": "{penanda}"}}]}
+kode, baris, _ = jalankan_cli("--akun", str(F_DEMO), "jalankan", "-", stdin=json.dumps(crud))
+cek(json_terakhir(baris)["status"] == "rencana_tidak_valid", "CRUD tanpa izin ubah data harus ditolak")
+n0 = len(SIM.panggilan)
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err_crud:
+    h = ag.jalankan_rencana(crud, cfg_demo, izinkan_berisiko=True)
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+nama = {l["langkah"]: l for l in r["langkah"]}
+dibuat = [x[1] for x in SIM.panggilan[n0:] if x[0] == "demo_buat"]
+dihapus = [x[1] for x in SIM.panggilan[n0:] if x[0] == "demo_hapus"]
+cek(len(dibuat) == 1 and dibuat[0] == f"Pesanan {r['penanda']}" and dihapus == dibuat and len(SIM.d_pesanan) == 6,
+    f"data uji dibuat lalu dihapus lagi: dibuat={dibuat} dihapus={dihapus}\n{err_crud.getvalue()[-2000:]}")
+cek(not nama["hapus_data_lama"]["berhasil"] and "data buatan uji" in nama["hapus_data_lama"]["galat"]
+    and "Pesanan #1" in SIM.d_pesanan, f"hapus data lama harus diblokir: {nama['hapus_data_lama']}")
+cek(not nama["simpan_sandi"]["berhasil"] and "mengunci akun" in nama["simpan_sandi"]["galat"]
+    and ("demo_ganti_sandi",) not in SIM.panggilan[n0:], "simpan kata sandi baru harus diblokir")
+cek("sakelar_sidik_jari_kembalikan" in nama and SIM.d_fingerprint is False, "sakelar dikembalikan otomatis")
+cek(SIM.tema == "no" and SIM.pesawat is False, "tema & jaringan dikembalikan di akhir uji")
+pd = r["perubahan_data"]
+cek(r["pemulihan_lengkap"] and [x["status_pulih"] for x in pd if x["jenis"] == "buat"] == ["dipulihkan"]
+    and all(l.get("fase") == "pemulihan" for l in r["langkah"] if l["langkah"].startswith("pulihkan_")),
+    f"catatan perubahan data: {pd}")
+print("24. CRUD + pemulihan + pengaman: OK ->", [(x["jenis"], x["status_pulih"]) for x in pd])
+
+# ---------------------------------------------------------------- 25. klasifikasi risiko label
+contoh_risiko = {
+    "Hapus": "data_lama", "Ya, Hapus": "data_lama", "Konfirmasi": "ubah_data", "Keluar": "ubah_data",
+    "Hapus filter": None, "Buka Kirim Pesanan ke SO": None, "Setujui Pengajuan\nRp 50.000": "data_lama",
+    "Pesanan #12\nRp 50.000\nMenunggu Konfirmasi": None, "Pengajuan Kas Kecil\nProses": None,
+    "Budi Santoso\nbudi@email.com": None, "Kirim via Email": "selalu", "Hubungi via WhatsApp": "selalu",
+    "Akun\nHapus akun": "selalu", "Bayar Sekarang": "selalu",
+}
+beda = {k: (ag.jenis_risiko(k), v) for k, v in contoh_risiko.items() if ag.jenis_risiko(k) != v}
+cek(not beda, f"klasifikasi risiko label (didapat, seharusnya): {beda}")
+print("25. klasifikasi risiko label: OK ->", len(contoh_risiko), "label")
 
 print(f"\nSEMUA {lulus} CEK LULUS (hasil uji di {TMP})")

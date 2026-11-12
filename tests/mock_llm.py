@@ -64,10 +64,74 @@ EVAL_2 = {
          "sumber": "terukur+visual", "deskripsi": "ImageButton 29 dp tidak punya label.",
          "bukti": [{"ref": "P0.6", "layar": "L1", "kode": "L1-A1", "keterangan": "ImageButton tanpa label"}],
          "dasar": "WCAG 4.1.2", "rekomendasi": "Tambahkan tooltip/Semantics label dan perbesar ke 48 dp."},
-        {"id": "T3", "judul": "Kategori aneh", "kategori": "estetika", "tingkat": "parah", "deskripsi": "uji normalisasi",
+        {"id": "T3", "judul": "Kategori aneh", "kategori": "astrologi", "tingkat": "parah", "deskripsi": "uji normalisasi",
          "bukti": ["teks bebas"], "rekomendasi": "-"}],
     "hal_positif": ["Login cepat (P0.4)"],
     "cakupan": {"sudah_diuji": ["beranda", "laporan", "teks besar"], "belum_diuji": []},
+    "permintaan_uji_ulang": []}
+
+
+POLA_PENANDA = re.compile(r"UJI-\d{4}-\d{6}")
+
+
+def rencana_demo(teks_user):
+    """Aplikasi demo (mode overtesting): putaran rencana = CRUD + teks besar + tema gelap + tanpa internet, dengan
+    pemulihan yang SENGAJA tidak menghapus data (menguji putaran pemulihan otomatis); putaran pemulihan = hapus data
+    berpenanda yang disebut di prompt."""
+    if "jenis putaran: pemulihan" in teks_user:
+        m = re.search(r"PERUBAHAN DATA YANG BELUM DIPULIHKAN[^\n]*\n(\[.*?\])\n", teks_user, re.S)
+        penanda = sorted({x["penanda"] for x in json.loads(m.group(1)) if x.get("penanda")}) if m else []
+        langkah = [{"aksi": "buka_aplikasi", "nama": "buka_aplikasi"}]
+        for i, m in enumerate(penanda, 1):
+            langkah += [{"aksi": "tap", "nama": f"buka_data_uji_{i}", "target": {"label_mengandung": m}},
+                        {"aksi": "tap", "nama": f"hapus_data_uji_{i}", "target": {"label": "Hapus"}, "ubah_data": "hapus",
+                         "objek": "pesanan"},
+                        {"aksi": "pastikan_tidak_ada", "nama": f"data_uji_hilang_{i}", "target": {"label_mengandung": m}}]
+        return {"aplikasi": "demo", "judul": "pemulihan_data_uji", "tujuan": "hapus data uji yang tertinggal", "langkah": langkah}
+    m = re.search(r"DAFTAR UJI MENDALAM[^\n]*\n(\[.*?\])\n", teks_user, re.S)
+    tugas = [x["id"] for x in json.loads(m.group(1))] if m else []
+    return {"aplikasi": "demo", "judul": "overtesting_crud", "tujuan": "form, CRUD, teks besar, tema gelap, tanpa internet",
+            "tugas": tugas, "langkah": [
+                {"aksi": "buka_aplikasi", "nama": "buka_aplikasi"},
+                {"aksi": "tap", "nama": "tambah", "target": {"label": "Tambah Pesanan"}},
+                {"aksi": "tap", "nama": "simpan_kosong", "target": {"label": "Simpan"}, "ubah_data": "buat", "objek": "pesanan",
+                 "catatan": "form kosong harus ditolak dengan pesan jelas"},
+                {"aksi": "tap", "nama": "tambah_lagi", "target": {"label": "Tambah Pesanan"}},
+                {"aksi": "ketik", "nama": "isi_judul", "target": {"hint": "Judul pesanan"}, "teks": "Pesanan {penanda} \U0001F600"},
+                {"aksi": "tap", "nama": "simpan", "target": {"label": "Simpan"}, "ubah_data": "buat", "objek": "pesanan"},
+                {"aksi": "pastikan_ada", "nama": "pesanan_tampil", "target": {"label_mengandung": "{penanda}"}},
+                {"aksi": "atur_skala_font", "nama": "font_besar", "skala": 1.3},
+                {"aksi": "buka_aplikasi", "nama": "buka_font_besar"},
+                {"aksi": "tangkap", "nama": "dasbor_font_besar"},
+                {"aksi": "atur_skala_font", "nama": "font_normal", "skala": 1.0},
+                {"aksi": "atur_tema", "nama": "tema_gelap", "tema": "gelap"},
+                {"aksi": "buka_aplikasi", "nama": "buka_tema_gelap"},
+                {"aksi": "tangkap", "nama": "dasbor_gelap"},
+                {"aksi": "atur_tema", "nama": "tema_terang", "tema": "terang"},
+                {"aksi": "atur_jaringan", "nama": "tanpa_internet", "status": "mati"},
+                {"aksi": "tap", "nama": "muat_ulang_offline", "target": {"label": "Muat ulang"}},
+                {"aksi": "atur_jaringan", "nama": "internet_hidup", "status": "hidup"},
+                {"aksi": "tap", "nama": "ketuk_cepat_1", "target": {"label": "Notifikasi"}},
+                {"aksi": "kembali", "nama": "kembali_1"},
+                {"aksi": "tap", "nama": "ketuk_cepat_2", "target": {"label": "Notifikasi"}},
+                {"aksi": "kembali", "nama": "kembali_2"}],
+            "pemulihan": [{"aksi": "pastikan_ada", "nama": "cek_saja", "target": {"label_mengandung": "{penanda}"}}]}
+
+
+EVAL_DEMO = {
+    "ringkasan_eksekutif": "Aplikasi demo crash saat Sinkronkan dan menampilkan NaN pada notifikasi.",
+    "keyakinan": 0.82, "alasan_keyakinan": "crash dan log konsisten", "keputusan": "laporan",
+    "temuan": [
+        {"id": "T1", "judul": "Sinkronkan membuat aplikasi crash", "kategori": "crash", "tingkat": "kritis", "sumber": "terukur",
+         "deskripsi": "Aplikasi tertutup dengan FATAL EXCEPTION.", "langkah_reproduksi": ["Buka aplikasi", "Ketuk tab Peta",
+                                                                                          "Ketuk Sinkronkan"],
+         "bukti": [{"ref": "P1.1", "keterangan": "log FATAL EXCEPTION"}], "dasar": "Nielsen #9",
+         "rekomendasi": "Tangani IllegalStateException saat sinkronisasi."},
+        {"id": "T2", "judul": "Total tagihan tampil NaN", "kategori": "data_janggal", "tingkat": "tinggi", "sumber": "terukur+visual",
+         "deskripsi": "Teks NaN bocor ke tampilan.", "langkah_reproduksi": ["Buka aplikasi", "Ketuk Notifikasi"],
+         "bukti": [{"layar": "L2", "kode": "L2-E1", "keterangan": "Total tagihan: NaN"}], "dasar": "Nielsen #1",
+         "rekomendasi": "Format angka dengan NumberFormat dan nilai bawaan."}],
+    "hal_positif": ["Navigasi tab konsisten"], "cakupan": {"sudah_diuji": ["semua menu"], "belum_diuji": []},
     "permintaan_uji_ulang": []}
 
 
@@ -110,7 +174,11 @@ def buat_handler(st):
             m = re.search(r"PUTARAN: (\d+) dari", teks_user)
             k = int(m.group(1)) if m else 0
             peran = (re.search(r"PERAN UJI: (\w+)", teks_user) or [None, "owner"])[1]
-            if "LLM PERANCANG UJI" in sistem:
+            if "LLM PERANCANG UJI" in sistem and "Dasbor Demo" in teks_user:
+                jawab = json.dumps(rencana_demo(teks_user), ensure_ascii=False)
+            elif "LLM EVALUATOR UI/UX" in sistem and "Dasbor Demo" in teks_user:
+                jawab = json.dumps(EVAL_DEMO, ensure_ascii=False)
+            elif "LLM PERANCANG UJI" in sistem:
                 if k == 1 and len(pesan) == 2:
                     jawab = "Berikut rencananya:\n" + json.dumps(RENCANA_SALAH)
                 else:

@@ -25,15 +25,17 @@ def exec_node(nama, posisi, isi, sekali=False, catatan=None):
 
 def buat(python="python", skrip="%USERPROFILE%\\uji-ui\\orkestrator.py"):
     catatan = (
-        "## Uji UI/UX otomatis: LLM Perancang + Pelaksana + LLM Evaluator\n"
-        "Untuk tiap skenario di **skenario.json**: observasi awal di HP -> **LLM Perancang** menyusun rencana -> "
-        "**Pelaksana** (Appium) menjalankannya -> **LLM Evaluator** menilai. Kalau keyakinan evaluator di bawah "
-        "ambang, evaluator menulis permintaan uji ulang dan alurnya kembali ke LLM Perancang (maks. putaran di "
-        "skenario.json). Setelah yakin, laporan dibuat; di akhir ada ringkasan semua aplikasi.\n\n"
+        "## Uji UI/UX otomatis (overtesting): penjelajah + LLM Perancang + Pelaksana + LLM Evaluator\n"
+        "Untuk tiap skenario di **skenario.json**: observasi awal di HP -> putaran 1 **penjelajah otomatis** (node LLM "
+        "Perancang menyiapkannya tanpa LLM, node Pelaksana mengetuk semua elemen yang bisa dijangkau) -> **LLM Evaluator** "
+        "menilai -> **LLM Perancang** menyusun uji mendalam (form, CRUD dengan pemulihan data, teks besar, tema gelap, "
+        "tanpa internet) -> **Pelaksana** -> **LLM Evaluator** -> ... Loop berhenti kalau semua elemen, tugas uji, dan "
+        "layar sudah tercakup dan data uji sudah dipulihkan (atau batas putaran/waktu di skenario.json). Lalu laporan; "
+        "di akhir ada ringkasan semua aplikasi.\n\n"
         "**Sebelum Execute workflow:** 9router jalan, `appium` jalan di terminal lain (Inspector ditutup), HP "
         "tersambung (`adb devices`), dan n8n dijalankan dengan `$env:NODES_EXCLUDE='[]'` supaya node Execute "
         "Command aktif. Ubah lokasi Python/skrip di node **Konfigurasi**.\n\n"
-        "Hasil: `C:\\Users\\<kamu>\\.n8n-files\\uji-ui\\sesi_.../laporan.html`. Satu skenario bisa 5-20 menit."
+        "Hasil: `C:\\Users\\<kamu>\\.n8n-files\\uji-ui\\sesi_.../laporan.html`. Satu skenario overtesting bisa 1-3 jam."
     )
     nodes = [
         node("Catatan", "n8n-nodes-base.stickyNote", 1, [-40, -240],

@@ -1,33 +1,40 @@
 {
-  "_catatan": "Daftar sesi uji untuk perintah 'semua' dan workflow n8n (nomor skenario dimulai dari 0). Ubah 'tujuan' sesuka hati; 'peran' harus ada di akun.json. Pengaturan di sini berlaku untuk semua skenario, kecuali ditimpa di skenario itu sendiri. jelajah_menyeluruh=true: loop lanjut sampai semua elemen yang bisa diklik sudah dijelajah atau maks_putaran tercapai (false: berhenti begitu evaluator yakin). beri_izin_otomatis=true: semua izin yang diminta aplikasi diberikan lewat adb sebelum uji.",
+  "_catatan": "Daftar sesi uji untuk perintah 'semua' dan workflow n8n (nomor skenario dimulai dari 0). Ubah 'tujuan' sesuka hati; 'peran' harus ada di akun.json. Pengaturan di sini berlaku untuk semua skenario, kecuali ditimpa di skenario itu sendiri. mode=overtesting: putaran 1 = penjelajah otomatis (mengetuk SEMUA elemen yang bisa dijangkau, tanpa LLM, tanpa mengubah data), lalu LLM menguji mendalam (form, CRUD dengan pemulihan, pencarian, teks besar, tema gelap, tanpa internet, ketuk cepat) sampai semua elemen, tugas uji, dan layar tercakup, atau maks_putaran/batas_menit_sesi tercapai, atau 3 putaran tanpa kemajuan. boleh_ubah_data=true: CRUD diizinkan, data uji diberi penanda UJI-... dan dihapus lagi; hapus/ubah status hanya untuk data berpenanda. Pembayaran, WhatsApp/telepon/SMS/email, hapus akun, ganti kata sandi, dan 2FA akun uji selalu diblokir. perintah_cadangan/perintah_pulihkan (opsional): perintah shell di komputer ini untuk mencadangkan database uji sebelum sesi dan memulihkannya sesudah sesi (kalau kamu punya akses server). mode=evaluasi: perilaku lama (berhenti begitu evaluator yakin).",
   "pengaturan": {
+    "mode": "overtesting",
     "ambang_yakin": 0.75,
-    "maks_putaran": 6,
+    "maks_putaran": 14,
+    "batas_menit_sesi": 180,
     "rekam": true,
-    "boleh_ubah_data": false,
+    "boleh_ubah_data": true,
     "beri_izin_otomatis": true,
-    "jelajah_menyeluruh": true
+    "jelajah_menyeluruh": true,
+    "jelajah_otomatis": true,
+    "batas_ketukan_jelajah": 400,
+    "batas_menit_jelajah": 45,
+    "perintah_cadangan": "",
+    "perintah_pulihkan": ""
   },
   "skenario": [
     {
       "aplikasi": "santamaria",
       "peran": "owner",
-      "tujuan": "Aplikasi Santa Maria (layanan kedukaan), peran owner/pemilik. Evaluasi beranda/dashboard dan menu utama yang dipakai pemilik untuk memantau operasional: aksesibilitas, waktu respons tiap menu, kerumitan tampilan, dan konsistensi navigasi. Jangan mengubah data."
+      "tujuan": "Aplikasi Santa Maria (layanan kedukaan), peran owner/pemilik. Overtesting SEMUA fitur pemilik: semua menu dan sub-menu (dasbor, peta, profil, anomali, keuangan, kas kecil, cuti, peta armada, menu lainnya), form dan CRUD dengan pemulihan data, pencarian dan filter, teks besar, tema gelap, tanpa internet, ketuk cepat. Cari bug, crash, data janggal, cacat visual, dan tampilan yang kurang enak dilihat, serta aksesibilitas dan waktu respons."
     },
     {
       "aplikasi": "santamaria",
       "peran": "consumer",
-      "tujuan": "Aplikasi Santa Maria, peran konsumen (keluarga yang memakai layanan, bisa jadi lanjut usia dan sedang berduka). Evaluasi seberapa mudah konsumen memahami layanan dan menemukan informasi penting: aksesibilitas (teks besar, kontras, ukuran tombol), kejelasan istilah, umpan balik saat memuat, dan waktu respons. Jangan mengubah data."
+      "tujuan": "Aplikasi Santa Maria, peran konsumen (keluarga yang memakai layanan, bisa jadi lanjut usia dan sedang berduka). Overtesting semua fitur konsumen: kemudahan memahami layanan dan menemukan informasi penting, form dan CRUD dengan pemulihan data, teks besar, tema gelap, tanpa internet. Cari bug, crash, data janggal, cacat visual, tampilan yang kurang enak dilihat, istilah yang membingungkan, aksesibilitas, dan waktu respons."
     },
     {
       "aplikasi": "yayasan",
       "peran": "yayasan_admin",
-      "tujuan": "Aplikasi Yayasan Santa Maria, peran admin yayasan. Evaluasi menu utama admin: aksesibilitas, waktu respons, kepadatan informasi pada daftar/tabel, dan konsistensi navigasi. Jangan mengubah data."
+      "tujuan": "Aplikasi Yayasan Santa Maria, peran admin yayasan. Overtesting semua menu admin: daftar/tabel (kepadatan informasi, pencarian, filter), form dan CRUD dengan pemulihan data, teks besar, tema gelap, tanpa internet. Cari bug, crash, data janggal, cacat visual, tampilan yang kurang enak dilihat, aksesibilitas, dan waktu respons."
     },
     {
       "aplikasi": "wasiat",
       "peran": "pengguna_google",
-      "tujuan": "Aplikasi Wasiat (login dengan akun Google). Evaluasi alur masuk dengan Google, beranda, dan menu utama: aksesibilitas, waktu respons, kerumitan tampilan, dan kejelasan alur. Jangan mengubah data."
+      "tujuan": "Aplikasi Wasiat (login dengan akun Google). Overtesting alur masuk dengan Google, beranda, dan semua menu: form dan CRUD dengan pemulihan data, teks besar, tema gelap, tanpa internet. Cari bug, crash, data janggal, cacat visual, tampilan yang kurang enak dilihat, kejelasan alur, aksesibilitas, dan waktu respons."
     }
   ]
 }

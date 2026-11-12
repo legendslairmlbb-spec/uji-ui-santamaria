@@ -46,7 +46,8 @@ UIA = "-android uiautomator"  # = AppiumBy.ANDROID_UIAUTOMATOR
 XPATH = "xpath"               # = AppiumBy.XPATH
 
 AKSI = ("buka_aplikasi", "login", "reset_aplikasi", "tap", "ketik", "gulir", "kembali", "tunggu", "tangkap",
-        "atur_skala_font")
+        "atur_skala_font", "atur_tema", "atur_jaringan", "pastikan_ada", "pastikan_tidak_ada")
+JENIS_UBAH_DATA = ("buat", "ubah", "hapus", "status", "lain", "biarkan")
 ARAH = {"bawah": "down", "atas": "up", "kiri": "left", "kanan": "right"}
 LABEL_TOMBOL_LOGIN = ("Masuk", "Login", "Log In", "Sign In", "Masuk Sekarang")
 # Tombol lanjut/persetujuan di layar Google saat login SSO (dicocokkan persis atau sebagai awalan).
@@ -82,19 +83,38 @@ IZIN_APPOPS = {
 KATA_KOLOM_KODE = re.compile(r"\bkode\b|organisasi|instansi", re.I)
 XPATH_KOLOM_SANDI = '//android.widget.EditText[@password="true"]'
 FILE_STATUS_LOGIN = FOLDER_DASAR / "status_login.json"
-# Tombol yang mengubah data, membuka aplikasi lain, atau mengakhiri sesi. Diblokir kecuali diizinkan.
-KATA_BERISIKO = re.compile(
-    r"\b(hapus|delete|remove|bayar|pay|kirim|send|submit|simpan|save|keluar|logout|log ?out|sign ?out|"
-    r"whatsapp|telepon|panggil|call|setujui|approve|tolak|reject|batalkan|konfirmasi|checkout|"
-    r"pesan sekarang|beli)\b", re.I)
+# Tombol yang SELALU diblokir, juga saat CRUD diizinkan: efek ke luar aplikasi yang tidak bisa ditarik kembali
+# (uang, pesan/panggilan ke orang lain) dan tindakan yang menghapus/menonaktifkan akun.
+KATA_SELALU_BLOKIR = re.compile(
+    r"\b(bayar|pay|payment|checkout|beli|buy|top ?up|whatsapp|telepon|panggil|call|sms|e-?mail|"
+    r"hapus akun|delete account|nonaktifkan akun|deactivate account|tutup akun)\b", re.I)
+# Kata kerja yang menyimpan/mengubah data atau mengakhiri sesi. Diblokir kecuali boleh_ubah_data; saat diizinkan,
+# langkahnya wajib berlabel "ubah_data" supaya tercatat dan dipulihkan.
+KATA_UBAH_DATA = re.compile(
+    r"\b(simpan|save|kirim|send|submit|ajukan|unggah|upload|hapus|delete|remove|buang|setujui|approve|tolak|reject|"
+    r"batalkan|konfirmasi|confirm|akui|acknowledge|selesaikan|resolve|abaikan|dismiss|terima|accept|proses|"
+    r"tugaskan|assign|tandai|arsipkan|archive|keluar|logout|log ?out|sign ?out|pesan sekarang)\b", re.I)
+# Mengubah data yang SUDAH ADA tidak bisa dipulihkan: hanya boleh pada data buatan uji (layar memuat penandanya).
+KATA_UBAH_DATA_LAMA = re.compile(
+    r"\b(hapus|delete|remove|buang|setujui|approve|tolak|reject|batalkan|akui|acknowledge|selesaikan|resolve|"
+    r"abaikan|dismiss|terima|accept|proses|tugaskan|assign|arsipkan|archive)\b", re.I)
+KATA_KELUAR_AKUN = re.compile(r"\b(keluar|logout|log ?out|sign ?out)\b", re.I)
+# Label navigasi yang kebetulan memuat kata di atas (mis. "Buka Kirim Pesanan ke SO", "Hapus filter").
+KATA_AMAN = re.compile(r"^(buka|lihat|open|view|tampilkan|cari|filter)\b|\bhapus (filter|pencarian|teks|riwayat pencarian)"
+                       r"|\breset filter\b", re.I)
+KATA_BERISIKO = KATA_UBAH_DATA  # nama lama, dipakai modul lain
+POLA_2FA = re.compile(r"verifikasi (2|dua) langkah|\b2fa\b|two[- ]factor|autentikator|authenticator", re.I)
+KATA_KIRIM_FORM = re.compile(r"\b(simpan|save|ubah|ganti|perbarui|update|change|kirim|submit|konfirmasi|aktifkan|enable|"
+                             r"verifikasi|lanjut|next)\b", re.I)
 
 CATATAN_METODE = (
-    "respon_ms = waktu dari aksi (tap/ketik) sampai kondisi tujuan terpenuhi (tunggu_muncul/"
-    "tunggu_hilang), diukur dengan polling Appium; sudah termasuk overhead Appium (kira-kira "
-    "0,1-0,5 detik), jadi bandingkan antar-run di HP yang sama, bukan sebagai angka absolut. "
-    "sampai_stabil_ms = sampai struktur layar berhenti berubah (dicek tiap 0,4 detik). "
-    "startup.total_time_ms = waktu cold start menurut Android (am start -W). "
-    "Metrik aksesibilitas dihitung dari struktur elemen (UiAutomator), bukan dari pengujian TalkBack."
+    "respon_ms = waktu dari aksi (tap/ketik) sampai kondisi tujuan terpenuhi (tunggu_muncul/tunggu_hilang), diukur "
+    "dengan polling Appium (termasuk overhead sekitar 0,1-0,5 detik), jadi bandingkan antar-run di HP yang sama. "
+    "mulai_berubah_ms = saat struktur layar pertama kali berbeda dari sebelum aksi (respons pertama yang terlihat); "
+    "sampai_stabil_ms = saat keadaan akhir layar pertama kali terlihat (dicek tiap 0,3 detik), bukan saat kestabilannya "
+    "dikonfirmasi. 'tanpa_perubahan' = aksi tidak mengubah layar sama sekali. Gulir tidak dinilai waktunya (durasi "
+    "gestur). startup.total_time_ms = waktu cold start menurut Android (am start -W). Metrik aksesibilitas dihitung "
+    "dari struktur elemen (UiAutomator), bukan dari pengujian TalkBack."
 )
 
 
@@ -366,8 +386,45 @@ def baca_skala_font():
         return 1.0
 
 
+POLA_ALAMAT_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+
+
+def jenis_risiko(label):
+    """None (aman), "selalu" (selalu diblokir), "ubah_data", atau "data_lama" (hanya pada data buatan uji).
+
+    Alamat email yang tampil sebagai data tidak dihitung sebagai tombol email. Label multi-baris adalah kartu/baris
+    daftar yang membuka detail: kata kerja hanya dinilai di baris pertamanya, karena baris berikutnya biasanya status
+    ("Menunggu Konfirmasi", "Proses"). Larangan mutlak tetap dicek di seluruh label."""
+    asli = POLA_ALAMAT_EMAIL.sub(" ", str(label or ""))
+    lb = " ".join(asli.split())
+    if not lb:
+        return None
+    if KATA_SELALU_BLOKIR.search(lb):
+        return "selalu"
+    kepala = next((" ".join(b.split()) for b in asli.splitlines() if b.strip()), lb)
+    if KATA_AMAN.search(kepala):
+        return None
+    if KATA_UBAH_DATA.search(kepala):
+        return "data_lama" if KATA_UBAH_DATA_LAMA.search(kepala) else "ubah_data"
+    return None
+
+
 def label_berisiko(label):
-    return bool(label) and KATA_BERISIKO.search(label) is not None
+    return jenis_risiko(label) is not None
+
+
+def tap_mengunci_akun(root, label):
+    """Menyimpan form kata sandi baru atau mengaktifkan verifikasi 2 langkah bisa mengunci akun uji."""
+    lb = " ".join(str(label or "").split())
+    if not KATA_KIRIM_FORM.search(lb) or POLA_2FA.search(lb):
+        return False  # bukan tombol kirim, atau justru menu untuk MEMBUKA layar 2FA
+    kolom = [el for el in root.iter() if el.get("class") == "android.widget.EditText"]
+    sandi = sum(1 for el in kolom if el.get("password") == "true")
+    if sandi >= 2 or (sandi == 1 and len(kolom) == 1):  # form ganti kata sandi (form login punya kolom identitas)
+        return True
+    teks = " ".join(filter(None, (el.get("content-desc") or el.get("text") for el in root.iter())))
+    return bool(POLA_2FA.search(teks) and re.search(r"\bqr\b|pindai|scan|masukkan kode|kode (6|enam) digit|"
+                                                    r"kunci rahasia|secret", teks, re.I))
 
 
 # ====================================================================== analisis XML
@@ -401,9 +458,65 @@ def _root(xml):
     return ET.fromstring(xml.encode("utf-8") if isinstance(xml, str) else xml)
 
 
-def analisis_xml(xml, density=None, maks_daftar=25):
-    """Hitung metrik aksesibilitas dan kerumitan dari page source Appium."""
+POLA_TEKS_JANGGAL = re.compile(
+    r"\b(null|undefined|NaN|Infinity)\b|Instance of '|\[object Object\]|\{\{.*?\}\}|(?<![\w%])%[sd](?!\w)|"
+    r"[Ll]orem ipsum|\bTODO\b|\bFIXME\b|Exception\b|\bError:|is not a subtype of|Null check operator")
+POLA_HARI = re.compile(r"(\d[\d.]*)\s*(hari|days?)\b", re.I)
+POLA_TAHUN = re.compile(r"\b\d{1,2}[\s/-](?:jan|feb|mar|apr|mei|may|jun|jul|agu|aug|sep|okt|oct|nov|des|dec)\w*[\s/-](\d{4})\b"
+                        r"|\b(\d{4})-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}/(\d{4})\b", re.I)
+
+
+def alasan_teks_janggal(teks):
+    """Teks yang hampir pasti cacat: nilai kosong/teknis bocor ke tampilan atau angka/tanggal yang mustahil."""
+    m = POLA_TEKS_JANGGAL.search(teks)
+    if m:
+        return f"teks teknis/kosong di tampilan: '{m.group(0)}'"
+    for m in POLA_HARI.finditer(teks):
+        try:
+            if float(m.group(1).replace(".", "")) > 3650:
+                return f"durasi tidak masuk akal: '{m.group(0)}'"
+        except ValueError:
+            pass
+    for m in POLA_TAHUN.finditer(teks):
+        tahun = int(next(g for g in m.groups() if g))
+        if tahun == 1970 or tahun < 1950 or tahun > 2100:
+            return f"tanggal tidak masuk akal: '{m.group(0)}'"
+    return None
+
+
+def _scroll_terdekat(el, induk):
+    return next((a for a in leluhur(el, induk) if a.get("scrollable") == "true"), None)
+
+
+def terpotong(el, induk, W, H, zona=(), sumbu="xy"):
+    """Elemen kemungkinan terpotong (bukan ukuran aslinya): menempel tepi kontainer gulir terdekat atau tepi layar,
+    atau masuk ke bilah sistem. sumbu "y" = hanya periksa atas/bawah (untuk tinggi), "x" = kiri/kanan (untuk lebar)."""
+    b = _bounds(el.get("bounds"))
+    if not b:
+        return False
+    sc = _scroll_terdekat(el, induk)
+    a = _bounds(sc.get("bounds")) if sc is not None else None
+    if "y" in sumbu:
+        if b[1] <= 0 or b[3] >= H - 1 or (a and (abs(b[1] - a[1]) <= 2 or abs(b[3] - a[3]) <= 2)):
+            return True
+        if any(_tumpang(b, z) and (z[1] <= 0 or z[3] >= H - 1) for z in zona):
+            return True
+    if "x" in sumbu:
+        if b[0] <= 0 or b[2] >= W - 1 or (a and (abs(b[0] - a[0]) <= 2 or abs(b[2] - a[2]) <= 2)):
+            return True
+    return False
+
+
+def ukuran_layar_xml(root):
+    kotak = [_bounds(el.get("bounds")) for el in root.iter() if _bounds(el.get("bounds"))]
+    return (max((b[2] for b in kotak), default=1080), max((b[3] for b in kotak), default=2400))
+
+
+def analisis_xml(xml, density=None, maks_daftar=25, zona=None):
+    """Hitung metrik aksesibilitas, kerumitan, dan cacat visual otomatis dari page source Appium.
+    Elemen yang terpotong tepi layar/kontainer gulir atau masuk bilah sistem tidak dinilai ukuran sentuhnya."""
     root = _root(xml)
+    zona = zona or []
     semua = []  # (elemen, kedalaman)
 
     def jelajah(el, dalam):
@@ -413,34 +526,75 @@ def analisis_xml(xml, density=None, maks_daftar=25):
             jelajah(anak, dalam + (0 if el.tag == "hierarchy" else 1))
 
     jelajah(root, 1)
+    _, induk = pohon_induk(root)
+    W, H = ukuran_layar_xml(root)
     terlihat = [el for el, _ in semua if el.get("displayed", "true") == "true"]
 
-    def ringkas(el):
+    def ringkas(el, **lain):
         info = {"kelas": (el.get("class") or "").split(".")[-1], "label": _label(el) or None,
                 "hint": el.get("hint") or None, "bounds": el.get("bounds")}
         u = _ukuran_dp(el, density)
         if u:
             info["ukuran_dp"] = f"{u[0]}x{u[1]}"
+        info.update(lain)
         return info
 
     interaktif = [el for el in terlihat
                   if el.get("clickable") == "true" or el.get("long-clickable") == "true"
                   or el.get("class") in KELAS_INTERAKTIF]
     id_interaktif = {id(el) for el in interaktif}
+    berlabel_per_kotak = {}
+    for el in terlihat:
+        if _label(el) and el.get("clickable") == "true":
+            berlabel_per_kotak.setdefault(el.get("bounds"), []).append(_label(el))
 
-    tanpa_label, hanya_hint, target_kecil, tombol_mati = [], [], [], []
+    tanpa_label, hanya_hint, target_kecil, tombol_mati, duplikat = [], [], [], [], []
     for el in interaktif:
         if not _label(el):
             if el.get("class") == "android.widget.EditText" and el.get("hint"):
                 hanya_hint.append(ringkas(el))
+            elif el.get("clickable") == "true" and berlabel_per_kotak.get(el.get("bounds")):
+                duplikat.append(ringkas(el, kembaran=berlabel_per_kotak[el.get("bounds")][0][:60]))
             else:
                 tanpa_label.append(ringkas(el))
         u = _ukuran_dp(el, density)
         if u and el.get("clickable") == "true" and (u[0] < MIN_TARGET_DP or u[1] < MIN_TARGET_DP):
-            target_kecil.append(ringkas(el))
+            sumbu = ("y" if u[1] < MIN_TARGET_DP else "") + ("x" if u[0] < MIN_TARGET_DP else "")
+            if not terpotong(el, induk, W, H, zona, sumbu):
+                target_kecil.append(ringkas(el))
         if (el.get("class") in ("android.widget.Button", "android.widget.ImageButton")
                 and el.get("clickable") != "true" and el.get("enabled") == "true"):
             tombol_mati.append(ringkas(el))
+
+    janggal, dilihat = [], set()
+    for el in terlihat:
+        for teks in {_label(el), (el.get("text") or "").strip()}:
+            if teks and teks not in dilihat:
+                dilihat.add(teks)
+                alasan = alasan_teks_janggal(teks)
+                if alasan:
+                    janggal.append(ringkas(el, teks=teks[:120], alasan=alasan))
+
+    daun = [el for el in terlihat if _label(el) and _bounds(el.get("bounds"))
+            and not any(_label(c) for c in el.iter() if c is not el)]
+    bertumpuk = []
+    for i, a in enumerate(daun):
+        ba = _bounds(a.get("bounds"))
+        anc_a = {id(x) for x in leluhur(a, induk)}
+        for b_el in daun[i + 1:]:
+            bb = _bounds(b_el.get("bounds"))
+            if ba == bb or not _tumpang(ba, bb) or id(b_el) in anc_a or id(a) in {id(x) for x in leluhur(b_el, induk)}:
+                continue
+            luas_a, luas_b = (ba[2] - ba[0]) * (ba[3] - ba[1]), (bb[2] - bb[0]) * (bb[3] - bb[1])
+            irisan = (min(ba[2], bb[2]) - max(ba[0], bb[0])) * (min(ba[3], bb[3]) - max(ba[1], bb[1]))
+            kecil, besar = min(luas_a, luas_b), max(luas_a, luas_b)
+            if kecil <= 0 or irisan < 0.25 * kecil or kecil < 0.2 * besar:
+                continue  # irisan kecil, atau lencana kecil di atas ikon (pola wajar)
+            if _scroll_terdekat(a, induk) is not _scroll_terdekat(b_el, induk):
+                continue  # lapisan berbeda (konten bergulir di bawah bilah mengambang): wajar
+            bertumpuk.append(ringkas(a, menumpuk=_label(b_el)[:60], bounds_lain=b_el.get("bounds")))
+            if len(bertumpuk) >= 10:
+                break
 
     teks = [_label(el) for el in terlihat if _label(el) and id(el) not in id_interaktif]
     return {
@@ -458,16 +612,24 @@ def analisis_xml(xml, density=None, maks_daftar=25):
             "input_label_hanya_dari_hint": hanya_hint[:maks_daftar],
             "target_sentuh_di_bawah_48dp": target_kecil[:maks_daftar],
             "tombol_tidak_bisa_diklik": tombol_mati[:maks_daftar],
+            "duplikat_klik": duplikat[:maks_daftar],
+            "teks_janggal": janggal[:maks_daftar],
+            "elemen_bertumpuk": bertumpuk[:maks_daftar],
         },
         "teks_di_layar": teks[:60],
     }
 
 
-def daftar_elemen(xml, density=None, maks=80, kotak=False):
+def daftar_elemen(xml, density=None, maks=80, kotak=False, zona=None):
     """Daftar elemen ringkas untuk LLM Perancang: hanya yang terlihat dan bermakna.
-    kotak=True menambahkan bounds [x1, y1, x2, y2] (dipakai untuk menggambar nomor di screenshot)."""
+    kotak=True menambahkan bounds [x1, y1, x2, y2] (dipakai untuk menggambar nomor di screenshot) beserta tanda
+    'terpotong' (menempel tepi layar/kontainer gulir) dan 'tertutup' (sebagian tertutup bilah sistem atau elemen
+    lain yang digambar di atasnya); keduanya tidak dipakai untuk menilai kontras."""
+    root = _root(xml)
+    urut, induk = pohon_induk(root) if kotak else ([], {})
+    W, H = ukuran_layar_xml(root) if kotak else (0, 0)
     hasil = []
-    for el in _root(xml).iter():
+    for el in root.iter():
         if el.tag == "hierarchy" or el.get("displayed", "true") != "true":
             continue
         kelas = el.get("class") or ""
@@ -483,7 +645,7 @@ def daftar_elemen(xml, density=None, maks=80, kotak=False):
             item["isi"] = el.get("text")
         for attr, kunci in (("clickable", "bisa_diklik"), ("selected", "terpilih"),
                             ("password", "kata_sandi"), ("scrollable", "bisa_digulir"),
-                            ("checked", "tercentang")):
+                            ("checked", "tercentang"), ("checkable", "sakelar")):
             if el.get(attr) == "true":
                 item[kunci] = True
         if el.get("enabled") == "false":
@@ -495,6 +657,11 @@ def daftar_elemen(xml, density=None, maks=80, kotak=False):
             item["pusat"] = [(b[0] + b[2]) // 2, (b[1] + b[3]) // 2]
             if kotak:
                 item["kotak"] = b
+                if terpotong(el, induk, W, H, zona or []):
+                    item["terpotong"] = True
+                _, porsi = titik_terlihat(root, el, zona or [], urut, induk, ambang=0.0)
+                if porsi < 0.9:
+                    item["tertutup"] = True
         u = _ukuran_dp(el, density)
         if u:
             item["ukuran_dp"] = f"{u[0]}x{u[1]}"
@@ -535,6 +702,135 @@ def elemen_di_titik(xml, x, y):
             if terbaik is None or luas <= terbaik[0]:
                 terbaik = (luas, el.get("content-desc") or el.get("text") or "")
     return terbaik[1] if terbaik else ""
+
+
+# ====================================================================== logcat
+POLA_LOGCAT = re.compile(r"^\s*(\d+\.\d+)\s+(\d+)\s+(\d+)\s+([VDIWEF])\s+([^:]*?)\s*:\s?(.*)$")
+POLA_LOG_GALAT = re.compile(r"Exception|Error|error|failed|gagal|status ?code[:= ]*[45]\d\d|statusCode[:= ]*[45]\d\d|"
+                            r"Null check|RangeError|NoSuchMethod|setState\(\) called after dispose|overflowed|timeout", re.I)
+
+
+def sensor_log(teks):
+    """Samarkan token, email, dan kunci panjang di baris log sebelum disimpan/dikirim ke LLM."""
+    teks = re.sub(r"eyJ[\w-]+\.[\w-]+\.[\w-]+", "[token]", teks)
+    teks = re.sub(r"(?i)(bearer|token|authorization|api[_-]?key|password|sandi)([\"':= ]+)[^\s\"',}]+", r"\1\2[disensor]", teks)
+    teks = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", "[email]", teks)
+    return re.sub(r"\b[A-Za-z0-9+/_-]{32,}\b", "[kunci]", teks)
+
+
+# ====================================================================== geometri layar: bagian elemen yang terlihat
+POLA_LAUNCHER = re.compile(r"launcher|miui\.home|\.home$|trebuchet|lawnchair|quickstep", re.I)
+POLA_FOKUS = re.compile(r'\s(focused|a11y-focused)="(true|false)"')
+
+
+def _norm_xml(xml):
+    """Page source tanpa atribut fokus (berubah sendiri) untuk membandingkan keadaan layar."""
+    return POLA_FOKUS.sub("", xml or "")
+
+
+def paket_xml(root):
+    """Paket pemilik layar: paket yang paling banyak dipakai node berukuran."""
+    hitung = {}
+    for el in root.iter():
+        p = el.get("package")
+        if p and _bounds(el.get("bounds")):
+            hitung[p] = hitung.get(p, 0) + 1
+    return max(hitung, key=hitung.get) if hitung else None
+
+
+def pohon_induk(root):
+    """(node dalam urutan dokumen, peta anak -> induk)."""
+    induk = {c: p for p in root.iter() for c in p}
+    return [el for el in root.iter() if el.tag != "hierarchy"], induk
+
+
+def leluhur(el, induk):
+    hasil = []
+    while el in induk:
+        el = induk[el]
+        hasil.append(el)
+    return hasil
+
+
+def _tumpang(a, b):
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def cari_node(root, target, urut=None, utamakan_klik=True):
+    """Node XML yang cocok dengan target rencana, dengan urutan pencarian yang sama seperti kandidat_locator
+    (id, label persis pada content-desc lalu text, label_mengandung, hint, kelas saja). Tanpa "urutan", kecocokan
+    yang bisa diketuk (atau berada di dalam elemen yang bisa diketuk) didahulukan: judul halaman "Profil" tidak
+    dipilih kalau ada tab "Profil"."""
+    if urut is None:
+        urut = [el for el in root.iter() if el.tag != "hierarchy"]
+    urut = [el for el in urut if _bounds(el.get("bounds"))]
+    kls = _kelas_penuh(target["kelas"]) if target.get("kelas") else None
+    ke = int(target.get("urutan") or 0)
+    induk = {c: p for p in root.iter() for c in p} if utamakan_klik and target.get("urutan") is None else None
+
+    def bisa_klik(el):
+        return el.get("clickable") == "true" or any(a.get("clickable") == "true" for a in leluhur(el, induk))
+
+    def pilih(uji, pakai_kelas=True):
+        h = [el for el in urut if (not (pakai_kelas and kls) or el.get("class") == kls) and uji(el)]
+        if induk is not None and h:
+            return next((el for el in h if bisa_klik(el)), h[0])
+        return h[ke] if len(h) > ke else None
+
+    langkah = []
+    if target.get("id"):
+        langkah.append((lambda el: el.get("resource-id") == target["id"], False))
+    if target.get("label"):
+        v = str(target["label"])
+        langkah += [(lambda el: el.get("content-desc") == v, True), (lambda el: el.get("text") == v, True)]
+    if target.get("label_mengandung"):
+        v2 = str(target["label_mengandung"])
+        langkah += [(lambda el: v2 in (el.get("content-desc") or ""), True), (lambda el: v2 in (el.get("text") or ""), True)]
+    if target.get("hint"):
+        langkah.append((lambda el: el.get("hint") == str(target["hint"]), False))
+    if not langkah and kls:
+        langkah.append((lambda el: True, True))
+    for uji, pakai_kelas in langkah:
+        n = pilih(uji, pakai_kelas)
+        if n is not None:
+            return n
+    return None
+
+
+def titik_terlihat(root, node, zona=(), urut=None, induk=None, ambang=0.3):
+    """Titik ketuk pada bagian elemen yang benar-benar terlihat: di luar bilah sistem/papan ketik (zona) dan tidak
+    tertutup elemen yang digambar di atasnya (elemen sesudahnya dalam urutan dokumen yang bisa diklik atau berlabel,
+    misalnya bilah navigasi mengambang atau lembar bawah). Kembalikan ((x, y), porsi_terlihat); titik None kalau yang
+    terlihat < ambang."""
+    b = _bounds(node.get("bounds"))
+    if not b or b[2] - b[0] < 2 or b[3] - b[1] < 2:
+        return None, 0.0
+    if urut is None or induk is None:
+        urut, induk = pohon_induk(root)
+    lewati = {id(x) for x in node.iter()} | {id(x) for x in leluhur(node, induk)}
+    try:
+        mulai = urut.index(node)
+    except ValueError:
+        mulai = len(urut)
+    penutup = []
+    for el in urut[mulai + 1:]:
+        if id(el) in lewati or not (el.get("clickable") == "true" or _label(el)):
+            continue  # kontainer gulir sendiri tidak dihitung; isinya (anak berlabel/bisa diklik) yang menutupi
+        bb = _bounds(el.get("bounds"))
+        if bb and _tumpang(bb, b):
+            penutup.append(bb)
+    w, h = b[2] - b[0], b[3] - b[1]
+    sampel = [(b[0] + w * fx, b[1] + h * fy) for fy in (0.5, 0.3, 0.7, 0.12, 0.88) for fx in (0.5, 0.3, 0.7, 0.12, 0.88)]
+    batas = [[z[0] - 8, z[1] - 8, z[2] + 8, z[3] + 8] for z in zona]
+    terlihat = [(x, y) for x, y in sampel
+                if not any(z[0] <= x < z[2] and z[1] <= y < z[3] for z in batas)
+                and not any(p[0] <= x < p[2] and p[1] <= y < p[3] for p in penutup)]
+    porsi = len(terlihat) / len(sampel)
+    if not terlihat or porsi < ambang:
+        return None, porsi
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    x, y = min(terlihat, key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
+    return (int(x), int(y)), porsi
 
 
 # ====================================================================== target elemen
@@ -588,18 +884,23 @@ def validasi_rencana(r, cfg, izinkan_berisiko=False):
         return salah + ['"langkah" harus berupa daftar yang tidak kosong']
     if len(langkah) > MAKS_LANGKAH:
         salah.append(f"maksimal {MAKS_LANGKAH} langkah per rencana (ada {len(langkah)})")
+    pulih = r.get("pemulihan") or []
+    if not isinstance(pulih, list):
+        salah.append('"pemulihan" harus berupa daftar langkah')
+        pulih = []
     akun = apps.get(app, {}).get("akun", {})
     sandi = {cfg.get("password_default")} | {a.get("password") for a in akun.values()}
     sandi.discard(None)
-    ada_login = bool(r.get("peran"))
-    for i, s in enumerate(langkah, 1):
+    keadaan = {"login": bool(r.get("peran")), "ubah": False}
+
+    def cek(nomor, s):
         if not isinstance(s, dict):
-            salah.append(f"langkah {i}: harus berupa objek")
-            continue
+            salah.append(f"{nomor}: harus berupa objek")
+            return
         aksi = s.get("aksi")
         if aksi not in AKSI:
-            salah.append(f"langkah {i}: aksi '{aksi}' tidak dikenal (pilihan: {', '.join(AKSI)})")
-            continue
+            salah.append(f"{nomor}: aksi '{aksi}' tidak dikenal (pilihan: {', '.join(AKSI)})")
+            return
         try:
             if aksi == "tap":
                 t = s.get("target")
@@ -609,44 +910,73 @@ def validasi_rencana(r, cfg, izinkan_berisiko=False):
                         raise ValueError("koordinat harus [x, y]")
                 else:
                     kandidat_locator(t)
-            if aksi == "ketik":
+            if aksi in ("ketik", "pastikan_ada", "pastikan_tidak_ada"):
                 kandidat_locator(s.get("target"))
             for k in ("tunggu_muncul", "tunggu_hilang"):
                 if k in s:
                     kandidat_locator(s[k])
         except ValueError as e:
-            salah.append(f"langkah {i}: {e}")
-        if aksi == "tap" and not izinkan_berisiko and isinstance(s.get("target"), dict):
-            lb = " ".join(str(s["target"].get(k) or "") for k in ("label", "label_mengandung"))
-            if label_berisiko(lb):
-                salah.append(f"langkah {i}: tap '{lb.strip()}' diblokir karena bisa mengubah data/keluar dari "
-                             "aplikasi; uji tanpa menekan tombol itu")
+            salah.append(f"{nomor}: {e}")
+        ubah = s.get("ubah_data")
+        if ubah is not None and ubah not in JENIS_UBAH_DATA:
+            salah.append(f"{nomor}: 'ubah_data' harus salah satu dari: {', '.join(JENIS_UBAH_DATA)}")
+        if ubah in ("buat", "ubah"):
+            keadaan["ubah"] = True
+        if ubah and ubah != "biarkan" and not izinkan_berisiko:
+            salah.append(f"{nomor}: perubahan data tidak diizinkan di sesi ini (boleh_ubah_data=false)")
+        if aksi == "tap" and isinstance(s.get("target"), dict):
+            lb = " ".join(str(s["target"].get(k) or "") for k in ("label", "label_mengandung")).strip()
+            jenis = jenis_risiko(lb)
+            if jenis == "selalu":
+                salah.append(f"{nomor}: tap '{lb}' selalu diblokir (pembayaran, pesan/telepon ke orang lain, atau hapus "
+                             "akun tidak bisa dipulihkan)")
+            elif jenis and not izinkan_berisiko:
+                salah.append(f"{nomor}: tap '{lb}' diblokir karena bisa mengubah data/keluar dari aplikasi; uji tanpa "
+                             "menekan tombol itu")
+            elif jenis and not ubah and not KATA_KELUAR_AKUN.search(lb):
+                salah.append(f"{nomor}: tap '{lb}' mengubah data; tambahkan \"ubah_data\": \"buat\"|\"ubah\"|\"hapus\"|"
+                             "\"status\" (dan langkah \"pemulihan\" untuk mengembalikannya)")
         if aksi == "login":
             if s.get("peran") not in akun:
-                salah.append(f"langkah {i}: peran '{s.get('peran')}' tidak ada untuk aplikasi {app} "
+                salah.append(f"{nomor}: peran '{s.get('peran')}' tidak ada untuk aplikasi {app} "
                              f"(pilihan: {', '.join(akun)})")
-            ada_login = True
+            keadaan["login"] = True
         if aksi == "ketik":
             if "teks" not in s and s.get("dari_akun") not in ("email", "hp", "kode", "password"):
-                salah.append(f"langkah {i}: 'ketik' butuh 'teks' atau 'dari_akun' (email/hp/kode/password)")
-            if "dari_akun" in s and not ada_login:
-                salah.append(f"langkah {i}: 'dari_akun' butuh langkah login sebelumnya atau 'peran' di rencana")
+                salah.append(f"{nomor}: 'ketik' butuh 'teks' atau 'dari_akun' (email/hp/kode/password)")
+            if "dari_akun" in s and not keadaan["login"]:
+                salah.append(f"{nomor}: 'dari_akun' butuh langkah login sebelumnya atau 'peran' di rencana")
             if s.get("teks") in sandi:
-                salah.append(f"langkah {i}: jangan tulis kata sandi di rencana; pakai \"dari_akun\": \"password\"")
+                salah.append(f"{nomor}: jangan tulis kata sandi di rencana; pakai \"dari_akun\": \"password\"")
         if aksi == "gulir" and s.get("arah", "bawah") not in ARAH:
-            salah.append(f"langkah {i}: arah gulir harus salah satu dari: {', '.join(ARAH)}")
+            salah.append(f"{nomor}: arah gulir harus salah satu dari: {', '.join(ARAH)}")
         if aksi == "atur_skala_font":
             try:
                 if not 0.85 <= float(s.get("skala", 1.0)) <= 2.0:
                     raise ValueError
             except (TypeError, ValueError):
-                salah.append(f"langkah {i}: 'skala' harus angka 0.85-2.0")
+                salah.append(f"{nomor}: 'skala' harus angka 0.85-2.0")
+        if aksi == "atur_tema" and s.get("tema", "gelap") not in ("gelap", "terang"):
+            salah.append(f"{nomor}: 'tema' harus gelap atau terang")
+        if aksi == "atur_jaringan" and s.get("status", "mati") not in ("mati", "hidup"):
+            salah.append(f"{nomor}: 'status' jaringan harus mati atau hidup")
         if aksi == "tunggu":
             try:
                 if not 0 < float(s.get("detik", 1)) <= 30:
                     raise ValueError
             except (TypeError, ValueError):
-                salah.append(f"langkah {i}: 'detik' harus angka 0-30")
+                salah.append(f"{nomor}: 'detik' harus angka 0-30")
+
+    for i, s in enumerate(langkah, 1):
+        cek(f"langkah {i}", s)
+    for i, s in enumerate(pulih, 1):
+        cek(f"pemulihan {i}", s)
+    if keadaan["ubah"] and not pulih:
+        salah.append('rencana membuat/mengubah data ("ubah_data": "buat"/"ubah") tetapi tidak punya "pemulihan": '
+                     "tambahkan langkah untuk menghapus data buatan uji ({penanda}) atau mengembalikan isian lama "
+                     "({nilai_awal:nama_langkah}), diakhiri pastikan_tidak_ada")
+    if len(pulih) > 25:
+        salah.append(f"maksimal 25 langkah pemulihan (ada {len(pulih)})")
     return salah
 
 
@@ -655,6 +985,7 @@ class Pelaksana:
     def __init__(self, driver, cfg, kode_app, folder, info, izinkan_berisiko=False):
         self.d = driver
         self.cfg = cfg
+        self.kode_app = kode_app
         self.app = cfg["aplikasi"][kode_app]
         self.pkg = self.app["package"]
         self.folder = folder
@@ -673,6 +1004,20 @@ class Pelaksana:
         self.berikutnya = None  # langkah rencana sesudah langkah yang sedang berjalan
         self.beri_izin = self.app.get("beri_izin_otomatis", True)
         self.izin_otomatis = []  # catatan pemberian izin lewat adb selama uji
+        self._zona = None    # bilah sistem (cache)
+        self._ukuran = None  # ukuran layar (cache)
+        self.fase = "utama"  # "pemulihan" saat menjalankan langkah pemulihan data
+        self.penanda = None  # penanda data uji run ini, mis. UJI-1112-153012
+        self.penanda_aktif = set()  # penanda data uji sesi ini (boleh dihapus/diubah statusnya)
+        self.nilai_awal = {}  # isi kolom sebelum diketik ulang (untuk {nilai_awal:nama_langkah})
+        self.ubah_data = []   # catatan perubahan data yang dilakukan uji
+        self.tema_awal = None
+        self.pesawat_awal = None
+        self.jaringan_svc = False
+        self.penanda_terakhir = None  # penanda data uji di baris/halaman tombol hapus/ubah status terakhir
+        self.log_sejak = None  # epoch HP terakhir yang sudah dibaca dari logcat
+        self.pid_app = None
+        self.saring_screenshot = None  # fungsi(xml) -> bool; None = selalu ambil screenshot
 
     # ---------- utilitas
     def cari(self, target):
@@ -718,22 +1063,194 @@ class Pelaksana:
         self.tunggu(ketemu, batas, jeda=0.2)
         return hasil.get("el")
 
-    def tunggu_stabil(self, batas=8.0, jeda=0.4):
-        t0 = time.perf_counter()
-        sebelumnya = None
-        while time.perf_counter() - t0 < batas:
-            sekarang = re.sub(r'\s(focused|a11y-focused)="(true|false)"', "", self.d.page_source)
-            if sekarang == sebelumnya:
-                return True
-            sebelumnya = sekarang
+    def tunggu_stabil(self, t0=None, sebelum=None, batas=8.0, jeda=0.3):
+        """Tunggu struktur layar berhenti berubah. Kembalikan (mulai_berubah, stabil) dalam detik sejak t0:
+        mulai_berubah = polling pertama yang berbeda dari 'sebelum' (None kalau tidak pernah berubah);
+        stabil = saat keadaan AKHIR pertama kali terlihat (bukan saat stabilnya dikonfirmasi), None kalau tidak stabil."""
+        t0 = time.perf_counter() if t0 is None else t0
+        mulai, lalu, t_lalu, berubah = time.perf_counter(), None, None, None
+        while time.perf_counter() - mulai < batas:
+            t_panggil = time.perf_counter()
+            kini = _norm_xml(self.d.page_source)
+            if sebelum is not None and berubah is None and kini != sebelum:
+                berubah = t_panggil - t0
+            if kini == lalu:
+                return berubah, t_lalu - t0
+            lalu, t_lalu = kini, t_panggil
             time.sleep(jeda)
+        return berubah, None
+
+    # ---------- geometri: ketuk hanya bagian elemen yang terlihat
+    def ukuran_layar(self):
+        if self._ukuran is None:
+            try:
+                u = self.d.get_window_size()
+                self._ukuran = (int(u["width"]), int(u["height"]))
+            except Exception:
+                self._ukuran = (1080, 2400)
+        return self._ukuran
+
+    def zona_sistem(self):
+        """Persegi bilah status, bilah navigasi HP, dan (kalau tampil) perkiraan papan ketik: jangan diketuk."""
+        W, H = self.ukuran_layar()
+        if self._zona is None:
+            zona = []
+            try:
+                bars = self.d.execute_script("mobile: getSystemBars", {}) or {}
+            except Exception:
+                bars = {}
+            for v in (bars.values() if isinstance(bars, dict) else []):
+                if isinstance(v, dict) and v.get("visible", True) and v.get("width") and v.get("height"):
+                    x, y = int(v.get("x") or 0), int(v.get("y") or 0)
+                    zona.append([x, y, x + int(v["width"]), y + int(v["height"])])
+            if not zona:  # perkiraan: bilah status 24 dp, navigasi 3 tombol 48 dp (gestur: 16 dp)
+                d = self.density or 3.0
+                mode = adb_baca("shell", "settings", "get", "secure", "navigation_mode").strip()
+                zona = [[0, 0, W, int(24 * d)], [0, H - int((16 if mode == "2" else 48) * d), W, H]]
+            self._zona = zona
+        zona = list(self._zona)
+        try:
+            if self.d.is_keyboard_shown():
+                zona.append([0, int(H * 0.58), W, H])
+        except Exception:
+            pass
+        return zona
+
+    def gulir_ke(self, node, root, induk, arah=None, porsi=0.45):
+        """Gulir sedikit supaya node masuk ke area yang terlihat (pakai kontainer gulir terdekat kalau ada)."""
+        W, H = self.ukuran_layar()
+        zona = self.zona_sistem()
+        bawah = min([z[1] for z in zona if z[1] > H / 2] or [H])
+        atas = max([z[3] for z in zona if z[3] < H / 2] or [0])
+        b = _bounds(node.get("bounds")) if node is not None else None
+        if arah is None:
+            arah = "bawah" if b and (b[1] + b[3]) / 2 > (atas + bawah) / 2 else "atas"
+        area = None
+        for el in ([] if node is None else leluhur(node, induk)):
+            bb = _bounds(el.get("bounds"))
+            if el.get("scrollable") == "true" and bb:
+                area = [bb[0], max(bb[1], atas), bb[2], min(bb[3], bawah)]
+                break
+        if not area or area[3] - area[1] < 100:
+            area = [int(W * 0.1), atas + int((bawah - atas) * 0.2), int(W * 0.9), atas + int((bawah - atas) * 0.8)]
+        try:
+            self.d.execute_script("mobile: scrollGesture", {"left": area[0], "top": area[1], "width": area[2] - area[0],
+                                                            "height": area[3] - area[1], "direction": ARAH[arah],
+                                                            "percent": porsi})
+        except Exception as e:  # noqa: BLE001
+            log("  gagal menggulir:", str(e)[:120])
+        time.sleep(0.5)
+
+    def siapkan_ketuk(self, target, batas_cari=10.0, maks_gulir=3):
+        """Cari elemen target di page source, gulir kalau tertutup/terpotong, lalu kembalikan titik ketuk yang aman.
+        Hasil: {"titik", "node", "xml", "digulir", "porsi"} atau {"alasan": "tidak_ditemukan"|"tertutup", ...}."""
+        akhir = time.perf_counter() + batas_cari
+        digulir, xml, node, keyboard_ditutup = 0, None, None, False
+        while True:
+            try:
+                xml = self.d.page_source
+                root = _root(xml)
+            except Exception:
+                xml, root = None, None
+            if root is not None:
+                urut, induk = pohon_induk(root)
+                node = cari_node(root, target, urut)
+                if node is not None:
+                    titik, porsi = titik_terlihat(root, node, self.zona_sistem(), urut, induk)
+                    if titik:
+                        return {"titik": titik, "node": node, "xml": xml, "digulir": digulir, "porsi": porsi}
+                    if not keyboard_ditutup and self.keyboard_tampil():
+                        keyboard_ditutup = True  # papan ketik menutupi target: tutup dulu sebelum menggulir
+                        self.tutup_keyboard()
+                        time.sleep(0.4)
+                        continue
+                    if digulir < maks_gulir:
+                        self.gulir_ke(node, root, induk)
+                        digulir += 1
+                        continue
+                    return {"alasan": "tertutup", "node": node, "xml": xml, "digulir": digulir, "porsi": porsi}
+            if time.perf_counter() >= akhir:
+                return {"alasan": "tidak_ditemukan", "xml": xml, "digulir": digulir}
+            time.sleep(0.3)
+
+    def pernah_terlihat(self, target, maks=10):
+        """True kalau target ada di salah satu tangkapan layar terakhir run ini (kemungkinan sekarang tertutup)."""
+        for lk in reversed(self.langkah[-maks:]):
+            f = self.folder / lk["xml"] if lk.get("xml") else None
+            try:
+                if f and f.exists() and cari_node(_root(f.read_text(encoding="utf-8")), target) is not None:
+                    return True
+            except ET.ParseError:
+                continue
         return False
+
+    def tunggu_app_siap(self, batas=30):
+        return self.tunggu(lambda: self.paket_aktif() == self.pkg
+                           and self.jumlah(f'packageName("{self.pkg}").clickable(true)') > 0, batas, jeda=0.4)
+
+    def kembali_ke_app(self):
+        """Aplikasi tidak di depan (layar utama HP / aplikasi lain): Back sekali-dua kali, kalau perlu buka lagi."""
+        for _ in range(2):
+            paket = self.paket_aktif()
+            if paket == self.pkg or (paket and POLA_LAUNCHER.search(paket)):
+                break
+            self.d.back()
+            time.sleep(0.8)
+        if self.paket_aktif() != self.pkg:
+            adb("shell", "am", "start", "-n", f'{self.pkg}/{self.app["activity"]}')
+            self.tunggu_app_siap()
+            self.tutup_dialog_izin()
+            self.lewati_gerbang()
+        return self.paket_aktif() == self.pkg
+
+    def coba_pulihkan_target(self, target, info, batas_cari):
+        """Target tidak bisa diketuk: coba kembalikan aplikasi ke depan, tutup lapisan (Back) kalau target tadi
+        terlihat, atau cari dengan menggulir. Kembalikan (info_baru, catatan_pemulihan)."""
+        catatan = []
+        paket = self.paket_aktif()
+        if paket and paket != self.pkg and not POLA_PENGATURAN.search(paket):
+            catatan.append(f"aplikasi tidak di depan ({paket}); dibawa kembali")
+            self.kembali_ke_app()
+            info = self.siapkan_ketuk(target, min(batas_cari, 5))
+            if info.get("titik"):
+                return info, catatan
+        if self.pernah_terlihat(target) or info.get("alasan") == "tertutup":
+            catatan.append("target tertutup lapisan lain (lembar bawah/dialog); tekan Back sekali")
+            self.d.back()
+            time.sleep(0.8)
+            if self.paket_aktif() != self.pkg:
+                catatan.append("Back menutup aplikasi; dibuka lagi")
+                self.kembali_ke_app()
+            info = self.siapkan_ketuk(target, 3)
+            if info.get("titik"):
+                return info, catatan
+        elif info.get("alasan") == "tidak_ditemukan" and info.get("xml"):
+            catatan.append("dicari dengan menggulir")
+            try:
+                root = _root(info["xml"])
+                _, induk = pohon_induk(root)
+            except ET.ParseError:
+                root, induk = None, {}
+            for _ in range(2):
+                self.gulir_ke(None, root, induk, arah="bawah", porsi=0.7)
+                info2 = self.siapkan_ketuk(target, 0.5)
+                if info2.get("titik"):
+                    return info2, catatan
+            for _ in range(2):
+                self.gulir_ke(None, root, induk, arah="atas", porsi=0.7)
+        return info, catatan
 
     def paket_aktif(self):
         try:
             return self.d.current_package
         except Exception:
             return None
+
+    def keyboard_tampil(self):
+        try:
+            return bool(self.d.is_keyboard_shown())
+        except Exception:
+            return False
 
     def tutup_keyboard(self):
         try:
@@ -1030,31 +1547,37 @@ class Pelaksana:
         return ok
 
     # ---------- pencatatan langkah
-    def ambil(self, dasar):
-        hasil = {"screenshot": None, "xml": None, "metrik": None}
-        try:
-            png = self.folder / f"{dasar}.png"
-            self.d.get_screenshot_as_file(str(png))
-            hasil["screenshot"] = png.name
-        except Exception as e:  # noqa: BLE001
-            log("  gagal mengambil screenshot:", e)
+    def ambil(self, dasar, screenshot=True):
+        hasil = {"screenshot": None, "xml": None, "metrik": None, "paket": None}
+        xml = None
         try:
             xml = self.d.page_source
             (self.folder / f"{dasar}.xml").write_text(xml, encoding="utf-8")
             hasil["xml"] = f"{dasar}.xml"
-            hasil["metrik"] = analisis_xml(xml, self.density)
+            hasil["paket"] = paket_xml(_root(xml))
+            hasil["metrik"] = analisis_xml(xml, self.density, zona=self.zona_sistem())
             self.xml_terakhir = xml
         except Exception as e:  # noqa: BLE001
             log("  gagal mengambil struktur layar:", e)
+        if screenshot and (self.saring_screenshot is None or not xml or self.saring_screenshot(xml)):
+            try:
+                png = self.folder / f"{dasar}.png"
+                self.d.get_screenshot_as_file(str(png))
+                hasil["screenshot"] = png.name
+            except Exception as e:  # noqa: BLE001
+                log("  gagal mengambil screenshot:", e)
         return hasil
 
     def catat_langkah(self, nama, aksi=None, sampai=None, batas=15.0, stabil=True,
-                      catatan="", tambahan=None):
-        """Jalankan satu aksi, ukur waktunya, lalu simpan screenshot + XML + metrik."""
+                      catatan="", tambahan=None, xml_sebelum=None, screenshot=True):
+        """Jalankan satu aksi, ukur waktunya, lalu simpan screenshot + XML + metrik.
+        xml_sebelum (page source sebelum aksi) dipakai untuk mengukur mulai_berubah_ms dan mendeteksi aksi yang tidak
+        mengubah layar sama sekali."""
         nama = _slug(nama)
+        sebelum = _norm_xml(xml_sebelum) if xml_sebelum else None
         t0 = time.perf_counter()
         t_mulai = round((t0 - self.t_acuan) * 1000)
-        berhasil, galat, respon, stabil_dt = True, None, None, None
+        berhasil, galat, respon, stabil_dt, berubah_dt = True, None, None, None, None
         keluar = {}
         cek_luar = [t0 + 1.0]
 
@@ -1081,8 +1604,7 @@ class Pelaksana:
                     f"aplikasi membuka layar sistem ({keluar['paket']}); kondisi tujuan belum diperiksa")
                 tambahan = {**(tambahan or {}), "keluar_ke_pengaturan": keluar["paket"]}
             elif stabil and berhasil:
-                self.tunggu_stabil()
-                stabil_dt = time.perf_counter() - t0
+                berubah_dt, stabil_dt = self.tunggu_stabil(t0, sebelum)
         except Exception as e:  # noqa: BLE001 - kegagalan apa pun dicatat sebagai hasil uji
             berhasil = False
             pesan = str(e).splitlines()[0][:300] if str(e) else ""
@@ -1090,14 +1612,42 @@ class Pelaksana:
             respon = time.perf_counter() - t0
 
         no = len(self.langkah) + 1
-        tangkapan = self.ambil(f"{no:02d}_{_slug(nama)}")
+        tangkapan = self.ambil(f"{no:02d}_{_slug(nama)}", screenshot=screenshot)
+        tambah = dict(tambahan or {})
+        # Pemeriksaan sesudah aksi: layar tidak berubah, aplikasi keluar ke layar utama HP/aplikasi lain, galat di log.
+        if sebelum is not None and self.xml_terakhir is not None and berhasil and not keluar:
+            if _norm_xml(self.xml_terakhir) == sebelum:
+                tambah["tanpa_perubahan"] = True
+            elif berubah_dt is not None:
+                tambah["mulai_berubah_ms"] = round(berubah_dt * 1000)
+        paket = tangkapan.get("paket")
+        if paket and paket != self.pkg and not POLA_PENGATURAN.search(paket) and not tambah.get("privasi") \
+                and self.aksi_sekarang not in ("buka_aplikasi", "izin_pengaturan"):
+            tambah["keluar_aplikasi"] = paket
+            if POLA_LAUNCHER.search(paket):
+                if self.aksi_sekarang == "kembali":
+                    catatan = (catatan + " | " if catatan else "") + (
+                        "Back dari layar akar menutup aplikasi (perilaku standar Android, bukan cacat)")
+                elif berhasil:
+                    berhasil = False
+                    galat = ("aplikasi tertutup ke layar utama HP setelah aksi (crash, atau ketukan mengenai tombol "
+                             "navigasi sistem)")
+            else:
+                catatan = (catatan + " | " if catatan else "") + f"aksi membuka aplikasi lain ({paket})"
+        galat_log = self.log_galat_baru()
+        if galat_log:
+            tambah["log_galat"] = galat_log
+            if any(g["jenis"] in ("crash", "anr") for g in galat_log):
+                tambah["crash"] = True
+                if berhasil:
+                    berhasil, galat = False, "aplikasi crash/tidak merespons (lihat log_galat)"
         rekaman = {
             "no": no, "langkah": nama, "aksi": self.aksi_sekarang, "rencana_ke": self.rencana_ke,
             "berhasil": berhasil, "t_mulai_ms": t_mulai,
             "respon_ms": round(respon * 1000) if (sampai and respon is not None) else None,
             "sampai_stabil_ms": round(stabil_dt * 1000) if stabil_dt is not None else None,
             "durasi_aksi_ms": round(respon * 1000) if (not sampai and respon is not None) else None,
-            "galat": galat, "catatan": catatan or None, **(tambahan or {}), **tangkapan,
+            "galat": galat, "catatan": catatan or None, **tambah, **tangkapan,
         }
         self.langkah.append(rekaman)
         m = (tangkapan["metrik"] or {}).get("masalah", {})
@@ -1105,30 +1655,249 @@ class Pelaksana:
         log(f"[{no:02d}] {nama:<30} {'OK   ' if berhasil else 'GAGAL'} waktu={waktu} ms "
             f"tanpa_label={len(m.get('interaktif_tanpa_label', []))} "
             f"target_kecil={len(m.get('target_sentuh_di_bawah_48dp', []))}"
+            + (" tanpa_perubahan" if tambah.get("tanpa_perubahan") else "")
+            + (f" log_galat={len(galat_log)}" if galat_log else "")
             + (f"  ({galat})" if galat else ""))
         return berhasil
 
-    def gagal_langkah(self, nama, pesan):
+    # ---------- log aplikasi (logcat): crash, ANR, galat Flutter/Java per langkah
+    def mulai_log(self):
+        try:
+            self.log_sejak = float(adb_baca("shell", "date", "+%s").strip())
+        except ValueError:
+            self.log_sejak = None
+        self.pid_app = (adb_baca("shell", "pidof", self.pkg).split() or [None])[0]
+
+    def log_galat_baru(self):
+        """Baris logcat baru sejak pemeriksaan terakhir yang menandakan crash/ANR/galat aplikasi yang diuji."""
+        if self.log_sejak is None:
+            return []
+        out = adb_baca("logcat", "-d", "-v", "epoch", "-T", f"{self.log_sejak:.3f}", timeout=20)
+        hasil, lihat, crash_pid = [], set(), None
+        for baris in out.splitlines():
+            m = POLA_LOGCAT.match(baris)
+            if not m:
+                continue
+            waktu, pid, tingkat, tag, pesan = float(m.group(1)), m.group(2), m.group(4), m.group(5).strip(), m.group(6)
+            self.log_sejak = max(self.log_sejak, waktu + 0.001)
+            mulai = re.search(r"Start proc (\d+):" + re.escape(self.pkg) + r"\b", pesan)
+            if mulai:
+                self.pid_app = mulai.group(1)
+                continue
+            jenis = None
+            if tag == "AndroidRuntime" and ("FATAL EXCEPTION" in pesan or pid == crash_pid):
+                crash_pid = pid
+                jenis = "crash" if pid == self.pid_app or self.pkg in out else None
+            elif tag == "ActivityManager" and pesan.startswith(f"ANR in {self.pkg}"):
+                jenis = "anr"
+            elif tag == "flutter" and (tingkat in "EF" or POLA_LOG_GALAT.search(pesan)):
+                jenis = "galat_flutter"
+            elif pid == self.pid_app and tag in ("System.err", "AndroidRuntime") and POLA_LOG_GALAT.search(pesan):
+                jenis = "galat_java"
+            if not jenis:
+                continue
+            bersih = sensor_log(pesan)[:300]
+            if (jenis, bersih) in lihat:
+                continue
+            lihat.add((jenis, bersih))
+            hasil.append({"jenis": jenis, "tingkat": tingkat, "tag": tag, "pesan": bersih})
+        return hasil[:8]
+
+    def gagal_langkah(self, nama, pesan, tambahan=None):
         def lempar():
             raise RuntimeError(pesan)
-        self.catat_langkah(nama, aksi=lempar, stabil=False)
+        self.catat_langkah(nama, aksi=lempar, stabil=False, tambahan=tambahan)
         return False
 
-    # ---------- eksekusi rencana
+    def page_source_aman(self):
+        try:
+            return self.d.page_source
+        except Exception:
+            return None
+
+    # ---------- kebijakan perubahan data (CRUD dengan pemulihan)
+    def ada_penanda(self, teks):
+        return bool(teks) and any(p and p in teks for p in self.penanda_aktif)
+
+    def tombol_milik_data_uji(self, node, root, induk):
+        """Tombol hapus/ubah status hanya boleh untuk data buatan uji: kontainer terbesar yang hanya memuat SATU tombol
+        berlabel sama (baris daftar, atau halaman detail) harus memuat penanda data uji."""
+        lb = _label(node)
+        wadah = node
+        for anc in leluhur(node, induk):
+            if any(x is not node and x.get("clickable") == "true" and _label(x) == lb for x in anc.iter()):
+                break
+            wadah = anc
+        teks = " ".join(filter(None, (_label(x) or x.get("text") for x in wadah.iter())))
+        self.penanda_terakhir = next((p for p in self.penanda_aktif if p and p in teks), None)
+        return self.penanda_terakhir is not None
+
+    def alasan_blokir(self, label, xml=None, node=None):
+        jenis = jenis_risiko(label)
+        if jenis == "selalu":
+            return (f"tap diblokir: '{label}' berdampak ke luar aplikasi/akun (pembayaran, pesan, telepon, hapus akun) "
+                    "dan tidak bisa dipulihkan")
+        try:
+            root = _root(xml) if xml else None
+        except ET.ParseError:
+            root = None
+        if root is not None and tap_mengunci_akun(root, label):
+            return "tap diblokir: mengubah kata sandi atau verifikasi 2 langkah akun uji bisa mengunci akun"
+        if jenis is None:
+            return None
+        if not self.izinkan_berisiko:
+            return f"tap diblokir: elemen '{label}' bisa mengubah data/keluar dari aplikasi"
+        if jenis == "data_lama":
+            ok = False
+            if root is not None and node is not None:
+                _, induk = pohon_induk(root)
+                cocok = next((x for x in root.iter() if x.get("bounds") == node.get("bounds") and _label(x) == _label(node)), None)
+                ok = cocok is not None and self.tombol_milik_data_uji(cocok, root, induk)
+            if not ok:
+                return (f"tap '{label}' diblokir: menghapus/mengubah status hanya boleh pada data buatan uji (tidak ada "
+                        f"penanda {', '.join(sorted(self.penanda_aktif)) or 'data uji'} di baris/halaman ini)")
+        return None
+
+    def catat_ubah_data(self, s, ok):
+        jenis = s.get("ubah_data")
+        if not jenis or jenis == "biarkan":
+            return
+        teks = json.dumps(s, ensure_ascii=False)
+        self.ubah_data.append({
+            "no": self.langkah[-1]["no"] if self.langkah else None, "langkah": self.langkah[-1]["langkah"] if self.langkah else None,
+            "fase": self.fase, "jenis": jenis, "objek": s.get("objek"), "berhasil": ok,
+            "penanda": self.penanda if (self.penanda and (self.penanda in teks or jenis == "buat")) else
+            next((p for p in self.penanda_aktif if p in teks), None)
+            or (self.penanda_terakhir if jenis in ("hapus", "status") else None)})
+        if self.langkah:
+            self.langkah[-1]["ubah_data"] = jenis
+
+    def kembalikan_sakelar(self, b_awal, checked_awal, nama):
+        """Sakelar yang diketuk dikembalikan ke keadaan awal (dialog sistem seperti sidik jari dibatalkan dulu)."""
+        time.sleep(0.4)
+        if self.aplikasi_tidak_di_depan():
+            self.d.back()
+            time.sleep(0.6)
+        xml = self.page_source_aman()
+        if not xml:
+            return
+        root = _root(xml)
+        urut, induk = pohon_induk(root)
+        sakelar = [el for el in urut if el.get("checkable") == "true" and el.get("bounds") == b_awal]
+        if not sakelar:
+            log("  sakelar tidak ditemukan lagi; keadaannya tidak bisa diperiksa")
+            return
+        if sakelar[0].get("checked") == checked_awal:
+            return
+        titik, _ = titik_terlihat(root, sakelar[0], self.zona_sistem(), urut, induk)
+        if not titik:
+            return
+        aksi_lama, self.aksi_sekarang = self.aksi_sekarang, "pemulihan_otomatis"
+        self.catat_langkah(f"{nama}_kembalikan", aksi=lambda: self.d.tap([titik]), xml_sebelum=xml, screenshot=False,
+                           tambahan={"fase": "pemulihan"},
+                           catatan=f"sakelar dikembalikan ke keadaan awal ({'aktif' if checked_awal == 'true' else 'nonaktif'}); "
+                                   "dilakukan skrip, bukan bagian alur aplikasi")
+        self.aksi_sekarang = aksi_lama
+
+    def ganti_nilai_awal(self, teks):
+        def ganti(m):
+            return self.nilai_awal.get(_slug(m.group(1)), "")
+        return re.sub(r"\{nilai_awal:([^}]+)\}", ganti, str(teks))
+
+    # ---------- pemulihan otomatis dan eksekusi rencana
+    def aplikasi_tidak_di_depan(self):
+        paket = self.paket_aktif()
+        return bool(paket) and paket != self.pkg and not POLA_PENGATURAN.search(paket)
+
+    def catat_kembali_ke_app(self, i):
+        paket = self.paket_aktif()
+        self.aksi_sekarang, self.rencana_ke = "pemulihan_otomatis", i
+        log(f"  aplikasi tidak di depan ({paket}); dibawa kembali sebelum langkah {i}")
+        return self.catat_langkah(f"kembali_ke_aplikasi_{i}", aksi=self.kembali_ke_app, stabil=False,
+                                  sampai=lambda: self.paket_aktif() == self.pkg, batas=40,
+                                  catatan=f"aplikasi tidak di depan ({paket}); skrip membawanya kembali (bukan alur aplikasi)")
+
+    def mulai_ulang_app(self, i, alasan):
+        self.aksi_sekarang, self.rencana_ke = "pemulihan_otomatis", i
+        log(f"  {alasan}: aplikasi dimulai ulang")
+
+        def ulang():
+            adb("shell", "am", "force-stop", self.pkg)
+            time.sleep(0.8)
+            adb("shell", "am", "start", "-W", "-n", f'{self.pkg}/{self.app["activity"]}')
+            self.tunggu_app_siap()
+            self.tutup_dialog_izin()
+            self.lewati_gerbang()
+        return self.catat_langkah(f"mulai_ulang_aplikasi_{i}", aksi=ulang, stabil=False,
+                                  catatan=f"{alasan}; aplikasi dimulai ulang oleh skrip (bukan alur aplikasi)")
+
     def jalankan(self, rencana):
-        for i, s in enumerate(rencana["langkah"], 1):
-            self.berikutnya = rencana["langkah"][i] if i < len(rencana["langkah"]) else None
-            if s["aksi"] not in ("buka_aplikasi", "reset_aplikasi") and self.di_luar_app():
-                self.pulihkan_ke_app(i)
-            if not self.satu_langkah(i, s) and not s.get("lanjut_jika_gagal"):
-                return False
-        return all(l["berhasil"] for l in self.langkah)
+        """Langkah gagal tidak menghentikan rencana: skrip memulihkan keadaan lalu lanjut. Berhenti hanya kalau
+        buka_aplikasi/login gagal, langkah bertanda berhenti_jika_gagal gagal, atau 6 langkah gagal berturut-turut."""
+        langkah, beruntun, berhenti = rencana["langkah"], 0, False
+        for i, s in enumerate(langkah, 1):
+            self.berikutnya = langkah[i] if i < len(langkah) else None
+            if s["aksi"] not in ("buka_aplikasi", "reset_aplikasi"):
+                if self.di_luar_app():
+                    self.pulihkan_ke_app(i)
+                elif s["aksi"] != "login" and self.aplikasi_tidak_di_depan():
+                    self.catat_kembali_ke_app(i)
+            if self.satu_langkah(i, s):
+                beruntun = 0
+                continue
+            if s["aksi"] in ("buka_aplikasi", "login") or s.get("berhenti_jika_gagal"):
+                berhenti = True
+                break
+            beruntun += 1
+            if beruntun >= 6:
+                log("  6 langkah gagal berturut-turut; sisa rencana dihentikan")
+                berhenti = True
+                break
+            if beruntun % 3 == 0:
+                self.mulai_ulang_app(i, "3 langkah gagal berturut-turut")
+        self.jalankan_pemulihan(rencana)
+        return not berhenti and all(l["berhasil"] for l in self.langkah)
+
+    def jalankan_pemulihan(self, rencana):
+        """Langkah "pemulihan" rencana SELALU dijalankan (juga kalau langkah utama gagal) untuk mengembalikan data."""
+        pulih = rencana.get("pemulihan") or []
+        if not pulih:
+            return
+        log(f"--- Pemulihan data: {len(pulih)} langkah")
+        self.fase = "pemulihan"
+        n0 = len(self.langkah)
+        try:
+            for j, s in enumerate(pulih, 1):
+                s = {**s, "nama": f"pulihkan_{s.get('nama') or s['aksi']}"}
+                if s["aksi"] not in ("buka_aplikasi", "reset_aplikasi") and self.aplikasi_tidak_di_depan():
+                    self.catat_kembali_ke_app(1000 + j)
+                self.satu_langkah(1000 + j, s)
+        finally:
+            self.fase = "utama"
+        for lk in self.langkah[n0:]:
+            lk["fase"] = "pemulihan"
 
     def kondisi_dari(self, s):
         muncul, hilang = s.get("tunggu_muncul"), s.get("tunggu_hilang")
         if not muncul and not hilang:
             return None
         return lambda: (not muncul or self.ada(muncul)) and (not hilang or not self.ada(hilang))
+
+    def ada_di_layar(self, target, gulir=0):
+        """Cari target di layar, kalau perlu sambil menggulir ke bawah lalu kembali ke atas."""
+        xml = self.page_source_aman()
+        if xml and cari_node(_root(xml), target) is not None:
+            return True
+        ketemu, n = False, 0
+        for n in range(1, gulir + 1):
+            self.gulir_ke(None, None, {}, arah="bawah", porsi=0.7)
+            xml = self.page_source_aman()
+            if xml and cari_node(_root(xml), target) is not None:
+                ketemu = True
+                break
+        for _ in range(n):
+            self.gulir_ke(None, None, {}, arah="atas", porsi=0.7)
+        return ketemu
 
     def satu_langkah(self, i, s):
         aksi = s["aksi"]
@@ -1137,6 +1906,7 @@ class Pelaksana:
         batas = float(s.get("batas_detik", 15))
         sampai = self.kondisi_dari(s)
         catatan = s.get("catatan", "")
+        tambah_fase = {"fase": "pemulihan"} if self.fase == "pemulihan" else None
 
         if aksi == "buka_aplikasi":
             return self.buka_aplikasi(nama, s.get("cold_start", True), sampai, batas)
@@ -1150,12 +1920,13 @@ class Pelaksana:
                 self.izin_ulang("setelah reset_aplikasi")
             return self.catat_langkah(nama, aksi=reset, stabil=False, catatan="data aplikasi dihapus (pm clear)")
         if aksi == "kembali":
-            return self.catat_langkah(nama, aksi=self.d.back, sampai=sampai, batas=batas, catatan=catatan)
+            return self.catat_langkah(nama, aksi=self.d.back, sampai=sampai, batas=batas, catatan=catatan,
+                                      xml_sebelum=self.page_source_aman(), tambahan=tambah_fase)
         if aksi == "tunggu":
             return self.catat_langkah(nama, aksi=lambda: time.sleep(float(s.get("detik", 1))),
                                       stabil=False, catatan=catatan)
         if aksi == "tangkap":
-            return self.catat_langkah(nama, stabil=False, catatan=catatan)
+            return self.catat_langkah(nama, stabil=False, catatan=catatan, tambahan=tambah_fase)
         if aksi == "atur_skala_font":
             skala = float(s.get("skala", 1.0))
 
@@ -1165,45 +1936,117 @@ class Pelaksana:
                 adb("shell", "settings", "put", "system", "font_scale", f"{skala:g}")
             return self.catat_langkah(nama, aksi=atur, sampai=sampai, batas=batas,
                                       catatan=(catatan + f" | skala font sistem {skala:g}").strip(" |"))
+        if aksi == "atur_tema":
+            gelap = s.get("tema", "gelap") != "terang"
+
+            def tema():
+                if self.tema_awal is None:
+                    m = re.search(r"Night mode:\s*(\w+)", adb_baca("shell", "cmd", "uimode", "night"))
+                    self.tema_awal = m.group(1) if m else "no"
+                adb("shell", "cmd", "uimode", "night", "yes" if gelap else "no")
+            return self.catat_langkah(nama, aksi=tema, sampai=sampai, batas=batas, xml_sebelum=self.page_source_aman(),
+                                      catatan=(catatan + f" | tema sistem {'gelap' if gelap else 'terang'} "
+                                                         "(dikembalikan otomatis di akhir uji)").strip(" |"))
+        if aksi == "atur_jaringan":
+            hidup = s.get("status", "mati") != "mati"
+
+            def jaringan():
+                self.atur_jaringan(hidup)
+            return self.catat_langkah(nama, aksi=jaringan, sampai=sampai, batas=batas, stabil=False,
+                                      catatan=(catatan + (" | internet dinyalakan lagi" if hidup else
+                                                          " | mode pesawat: aplikasi tanpa internet (dikembalikan "
+                                                          "otomatis di akhir uji)")).strip(" |"))
         if aksi == "gulir":
             return self.catat_langkah(nama, aksi=lambda: self.gulir(s.get("arah", "bawah"),
                                                                      int(s.get("jumlah", 1))),
-                                      sampai=sampai, batas=batas, catatan=catatan)
+                                      sampai=sampai, batas=batas, catatan=catatan, xml_sebelum=self.page_source_aman())
+        if aksi in ("pastikan_ada", "pastikan_tidak_ada"):
+            harap = aksi == "pastikan_ada"
+            target = s["target"]
+
+            def periksa():
+                ada = self.tunggu(lambda: self.ada_di_layar(target), float(s.get("batas_cari_detik", 3))) if harap \
+                    else self.ada_di_layar(target)
+                if not ada and s.get("gulir_cari", True):
+                    ada = self.ada_di_layar(target, gulir=4)
+                if ada != harap:
+                    raise RuntimeError(f"pemeriksaan gagal: {json.dumps(target, ensure_ascii=False)} "
+                                       + ("tidak ditemukan" if harap else "masih ada"))
+            return self.catat_langkah(nama, aksi=periksa, stabil=False, tambahan={**(tambah_fase or {}), "target": target},
+                                      catatan=(catatan + f" | pemeriksaan: elemen harus {'ada' if harap else 'tidak ada'}").strip(" |"))
 
         target = s["target"]
         if aksi == "tap" and "koordinat" in target:
             x, y = (int(v) for v in target["koordinat"])
-            if not self.izinkan_berisiko:
-                try:
-                    lb = elemen_di_titik(self.d.page_source, x, y)
-                except Exception:
-                    lb = ""
-                if label_berisiko(lb):
-                    return self.gagal_langkah(nama, f"tap diblokir: elemen '{lb}' bisa mengubah data/keluar dari aplikasi")
-            return self.catat_langkah(nama, aksi=lambda: self.d.tap([(x, y)]), sampai=sampai,
+            if any(z[0] <= x < z[2] and z[1] <= y < z[3] for z in self.zona_sistem()):
+                return self.gagal_langkah(nama, "koordinat berada di bilah status/navigasi HP; pakai label elemen")
+            xml = self.page_source_aman()
+            lb = elemen_di_titik(xml, x, y) if xml else ""
+            alasan = self.alasan_blokir(lb, xml)
+            if alasan:
+                return self.gagal_langkah(nama, alasan)
+            return self.catat_langkah(nama, aksi=lambda: self.d.tap([(x, y)]), sampai=sampai, xml_sebelum=xml,
                                       batas=batas, catatan=(catatan + " | tap koordinat").strip(" |"))
-        # Cari elemen dulu (di luar pengukuran waktu), baru lakukan aksi.
-        el = self.tunggu_elemen(target, float(s.get("batas_cari_detik", 10)))
-        if el is None:
-            return self.gagal_langkah(nama, f"elemen tidak ditemukan: {json.dumps(target, ensure_ascii=False)}")
+
+        # Cari elemen dulu (di luar pengukuran waktu), pastikan bagian yang diketuk terlihat, baru lakukan aksi.
+        batas_cari = float(s.get("batas_cari_detik", 10))
+        info = self.siapkan_ketuk(target, batas_cari)
+        pemulihan = []
+        if not info.get("titik") and not s.get("tanpa_pemulihan"):
+            info, pemulihan = self.coba_pulihkan_target(target, info, batas_cari)
+        teks_target = json.dumps(target, ensure_ascii=False)
+        if not info.get("titik"):
+            if info.get("alasan") == "tertutup":
+                n = info["node"]
+                return self.gagal_langkah(
+                    nama, f"elemen {teks_target} tertutup bilah navigasi/elemen lain dan tidak bisa digulir ke area "
+                          "yang terlihat", tambahan={"tak_terjangkau": {"label": _label(n) or None, "kelas": (n.get("class") or "").split(".")[-1],
+                                                                         "bounds": n.get("bounds")}, "pemulihan": pemulihan or None})
+            return self.gagal_langkah(nama, f"elemen tidak ditemukan: {teks_target}",
+                                      tambahan={"pemulihan": pemulihan or None})
+        node, titik = info["node"], info["titik"]
+        lb = _label(node) or node.get("text") or ""
+        extra = {"titik_ketuk": list(titik)}
+        if info.get("digulir"):
+            extra["digulir"] = info["digulir"]
+        if pemulihan:
+            extra["pemulihan"] = pemulihan
+        if tambah_fase:
+            extra.update(tambah_fase)
+
         if aksi == "tap":
-            if not self.izinkan_berisiko:
-                try:
-                    lb = el.get_attribute("content-desc") or el.get_attribute("text") or ""
-                except Exception:
-                    lb = ""
-                if label_berisiko(lb):
-                    return self.gagal_langkah(nama, f"tap diblokir: elemen '{lb}' bisa mengubah data/keluar dari aplikasi")
-            return self.catat_langkah(nama, aksi=el.click, sampai=sampai, batas=batas, catatan=catatan)
+            alasan = self.alasan_blokir(lb, info["xml"], node)
+            if alasan:
+                return self.gagal_langkah(nama, alasan, tambahan={"diblokir": True})
+            # Sakelar pengaturan (Switch/Toggle) dikembalikan otomatis; kotak centang di form & gerbang izin tidak.
+            sakelar = (node.get("checkable") == "true" and not self.di_gerbang
+                       and node.get("class") in ("android.widget.Switch", "android.widget.ToggleButton"))
+            b_awal, checked_awal = node.get("bounds"), node.get("checked")
+            ok = self.catat_langkah(nama, aksi=lambda: self.d.tap([titik]), sampai=sampai, batas=batas,
+                                    catatan=catatan, xml_sebelum=info["xml"], tambahan=extra)
+            self.catat_ubah_data(s, ok)
+            if ok and KATA_KELUAR_AKUN.search(lb) and jenis_risiko(lb):
+                tulis_status_login(self.pkg, None)
+            if sakelar and s.get("ubah_data") != "biarkan":
+                self.kembalikan_sakelar(b_awal, checked_awal, nama)
+            return ok
 
         # aksi == "ketik"
         rahasia = s.get("dari_akun") == "password"
-        nilai = s["teks"] if "teks" in s else self.nilai_akun(s["dari_akun"])
+        nilai = self.ganti_nilai_awal(s["teks"]) if "teks" in s else self.nilai_akun(s["dari_akun"])
         if nilai is None:
             return self.gagal_langkah(nama, f"nilai '{s.get('dari_akun')}' tidak ada di akun peran aktif")
+        hint = node.get("hint") or ""
 
         def isi():
-            el.click()
+            self.d.tap([titik])
+            time.sleep(0.2)
+            el = self.cari(target)
+            if el is None:
+                raise RuntimeError("kolom input tidak bisa difokuskan")
+            if self.izinkan_berisiko and not rahasia and node.get("password") != "true":
+                lama = el.get_attribute("text") or ""
+                self.nilai_awal[nama] = "" if lama == hint else lama
             if s.get("hapus_dulu", True):
                 try:
                     el.clear()
@@ -1213,9 +2056,38 @@ class Pelaksana:
             if s.get("tutup_keyboard"):
                 self.tutup_keyboard()
 
-        return self.catat_langkah(nama, aksi=isi, sampai=sampai, batas=batas, stabil=False,
-                                  catatan=(catatan + " | input; durasi termasuk waktu mengetik Appium"
-                                           + (" | nilai rahasia" if rahasia else "")).strip(" |"))
+        ok = self.catat_langkah(nama, aksi=isi, sampai=sampai, batas=batas, stabil=False, tambahan=extra,
+                                catatan=(catatan + " | input; durasi termasuk waktu mengetik Appium"
+                                         + (" | nilai rahasia" if rahasia else "")).strip(" |"))
+        self.catat_ubah_data(s, ok)
+        return ok
+
+    def atur_jaringan(self, hidup):
+        """Mode pesawat lewat adb (USB tetap tersambung); keadaan awal disimpan untuk dikembalikan."""
+        if self.pesawat_awal is None:
+            self.pesawat_awal = adb_baca("shell", "settings", "get", "global", "airplane_mode_on").strip() or "0"
+        adb("shell", "cmd", "connectivity", "airplane-mode", "disable" if hidup else "enable")
+        time.sleep(1.5)
+        kini = adb_baca("shell", "settings", "get", "global", "airplane_mode_on").strip()
+        if kini != ("0" if hidup else "1"):  # HP lama: matikan/nyalakan Wi-Fi dan data seluler
+            for svc in ("wifi", "data"):
+                adb("shell", "svc", svc, "enable" if hidup else "disable")
+            self.jaringan_svc = not hidup
+
+    def kembalikan_pengaturan_hp(self):
+        """Skala font, tema, dan jaringan dikembalikan ke keadaan sebelum uji."""
+        if self.skala_font_awal is not None:
+            adb("shell", "settings", "put", "system", "font_scale", f"{self.skala_font_awal:g}")
+            log(f"skala font sistem dikembalikan ke {self.skala_font_awal:g}")
+        if self.tema_awal is not None:
+            adb("shell", "cmd", "uimode", "night", self.tema_awal)
+            log(f"tema sistem dikembalikan ({self.tema_awal})")
+        if self.pesawat_awal is not None:
+            adb("shell", "cmd", "connectivity", "airplane-mode", "enable" if self.pesawat_awal == "1" else "disable")
+            if self.jaringan_svc:
+                for svc in ("wifi", "data"):
+                    adb("shell", "svc", svc, "enable")
+            log("jaringan dikembalikan ke keadaan awal")
 
     def nilai_akun(self, kunci):
         akun = self.app.get("akun", {}).get(self.peran_aktif or "", {})
@@ -1525,12 +2397,43 @@ def sambung_appium():
                     "(pastikan 'appium' sedang jalan dan sesi Inspector sudah ditutup)") from e
 
 
-def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=False):
-    salah = validasi_rencana(rencana, cfg, izinkan_berisiko)
-    if salah:
-        return {"status": "rencana_tidak_valid", "berhasil": False, "kesalahan": salah}
+def buat_penanda():
+    """Penanda unik data buatan uji, ditulis di kolom teks supaya data itu bisa dicari dan dihapus lagi."""
+    return f"UJI-{datetime.now():%m%d-%H%M%S}"
 
-    kode_app = rencana["aplikasi"]
+
+def status_pemulihan(langkah, ubah_data):
+    """Status pemulihan tiap perubahan data yang berhasil di fase utama:
+    dipulihkan (terbukti hilang lewat pastikan_tidak_ada / langkah pemulihan lengkap), dihapus (dihapus tapi belum
+    diperiksa), tidak_perlu (yang dihapus/diubah adalah data buatan uji), atau belum."""
+    pulih_ok = [l for l in langkah if l.get("fase") == "pemulihan"]
+    semua_pulih_ok = bool(pulih_ok) and all(l["berhasil"] for l in pulih_ok)
+    hasil = []
+    for e in ubah_data:
+        if e["fase"] != "utama" or not e["berhasil"]:
+            continue
+        m = e.get("penanda")
+        sesudah = [l for l in langkah if l["no"] > (e["no"] or 0)]
+        hilang = m and any(l.get("aksi") == "pastikan_tidak_ada" and l["berhasil"] and m in json.dumps(l.get("target") or {})
+                           for l in sesudah)
+        dihapus = m and any(x["jenis"] == "hapus" and x["berhasil"] and x.get("penanda") == m and x["no"] > e["no"]
+                            for x in ubah_data)
+        if e["jenis"] in ("hapus", "status"):
+            st = "tidak_perlu"  # hanya bisa lolos pengaman pada data berpenanda (data buatan uji)
+        elif hilang:
+            st = "dipulihkan"
+        elif e["jenis"] == "ubah" and semua_pulih_ok:
+            st = "dipulihkan"
+        elif dihapus:
+            st = "dihapus"
+        else:
+            st = "belum"
+        hasil.append({**e, "status_pulih": st})
+    return hasil
+
+
+def buka_pelaksana(kode_app, cfg, folder, izinkan_berisiko=False, judul="uji"):
+    """Pemeriksaan HP + aplikasi, folder hasil, sambungan Appium, dan objek Pelaksana."""
     app = cfg["aplikasi"][kode_app]
     pastikan_hp(cfg)
     if not aplikasi_terpasang(app["package"]):
@@ -1539,17 +2442,74 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
     if not info["model"]:
         raise Gagal(f"HP {SERIAL_AKTIF} tidak menjawab perintah adb. Cek kabel USB dan buka kunci layar HP, "
                     "lalu jalankan lagi")
-
-    folder = Path(folder) if folder else (
-        FOLDER_DASAR / f"{datetime.now():%Y%m%d_%H%M%S}_{kode_app}_{_slug(rencana.get('judul', 'uji'))}")
+    folder = Path(folder) if folder else (FOLDER_DASAR / f"{datetime.now():%Y%m%d_%H%M%S}_{kode_app}_{_slug(judul)}")
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "rencana.json").write_text(json.dumps(rencana, ensure_ascii=False, indent=2), encoding="utf-8")
-
     log(f"Menyambung ke Appium di {APPIUM_URL} ...")
     driver = sambung_appium()
-    p = Pelaksana(driver, cfg, kode_app, folder, info, izinkan_berisiko)
+    return Pelaksana(driver, cfg, kode_app, folder, info, izinkan_berisiko), driver, info, folder
+
+
+def tulis_ringkasan(p, rencana, info, mulai, t0, berhasil, video, izinkan_berisiko, tambahan=None):
+    app = p.app
+    perubahan = status_pemulihan(p.langkah, p.ubah_data)
+    ringkasan = {
+        "aplikasi": {"kode": p.kode_app, "nama": app.get("nama"), "package": app["package"],
+                     "versi": info.get("versi_aplikasi")},
+        "perangkat": info,
+        "judul": rencana.get("judul"),
+        "tujuan": rencana.get("tujuan"),
+        "peran": p.peran_aktif,
+        "waktu_mulai": mulai,
+        "berhasil": berhasil,
+        "durasi_total_ms": round((time.perf_counter() - t0) * 1000),
+        "rekaman": video,
+        "izinkan_aksi_berisiko": izinkan_berisiko,
+        "beri_izin_otomatis": p.beri_izin,
+        "izin_otomatis": p.izin_otomatis,
+        "catatan_metode": CATATAN_METODE,
+        "penanda": p.penanda,
+        "perubahan_data": perubahan,
+        "pemulihan_lengkap": all(x["status_pulih"] in ("dipulihkan", "tidak_perlu") for x in perubahan),
+        "zona_sistem": p._zona,
+        "langkah": p.langkah,
+        "layar_akhir": daftar_elemen(p.xml_terakhir, p.density) if p.xml_terakhir else [],
+        **(tambahan or {}),
+    }
+    (p.folder / "ringkasan.json").write_text(json.dumps(ringkasan, ensure_ascii=False, indent=2), encoding="utf-8")
+    return ringkasan
+
+
+def hasil_run(p, berhasil, video, folder):
+    gagal = [l for l in p.langkah if not l["berhasil"]]
+    log(f"\n{'BERHASIL' if berhasil else 'TIDAK BERHASIL'}. Hasil: {folder}")
+    g = gagal[0] if gagal else None
+    return {
+        "status": "selesai" if berhasil else "gagal_langkah",
+        "berhasil": berhasil,
+        "folder": str(folder),
+        "ringkasan": str(folder / "ringkasan.json"),
+        "jumlah_langkah": len(p.langkah),
+        "jumlah_gagal": len(gagal),
+        "langkah_gagal": ({"no": g["no"], "langkah": g["langkah"], "galat": g["galat"], "screenshot": g["screenshot"]}
+                          if g else None),
+        "rekaman": video,
+    }
+
+
+def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=False):
+    penanda = buat_penanda()
+    rencana = json.loads(json.dumps(rencana, ensure_ascii=False).replace("{penanda}", penanda))
+    salah = validasi_rencana(rencana, cfg, izinkan_berisiko)
+    if salah:
+        return {"status": "rencana_tidak_valid", "berhasil": False, "kesalahan": salah}
+
+    kode_app = rencana["aplikasi"]
+    p, driver, info, folder = buka_pelaksana(kode_app, cfg, folder, izinkan_berisiko, rencana.get("judul", "uji"))
+    (folder / "rencana.json").write_text(json.dumps(rencana, ensure_ascii=False, indent=2), encoding="utf-8")
     p.peran_aktif = rencana.get("peran")
     p.beri_izin = rencana.get("beri_izin_otomatis", p.beri_izin)
+    p.penanda = penanda
+    p.penanda_aktif = {penanda, *[str(x) for x in rencana.get("penanda_sesi") or [] if x]}
     p.izin_ulang("awal uji")
     if p.beri_izin and rencana["langkah"][0]["aksi"] == "buka_aplikasi":
         st = p.aktifkan_autostart()
@@ -1560,6 +2520,7 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
     mulai = datetime.now().isoformat(timespec="seconds")
     t0 = time.perf_counter()
     berhasil, video = False, None
+    p.mulai_log()
     sedang_rekam = rekam and p.mulai_rekam()
     p.t_acuan = time.perf_counter()
     try:
@@ -1567,46 +2528,369 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
     finally:
         if sedang_rekam:
             video = p.selesai_rekam()
-        if p.skala_font_awal is not None:
-            adb("shell", "settings", "put", "system", "font_scale", f"{p.skala_font_awal:g}")
-            log(f"skala font sistem dikembalikan ke {p.skala_font_awal:g}")
-        ringkasan = {
-            "aplikasi": {"kode": kode_app, "nama": app.get("nama"), "package": app["package"],
-                         "versi": info.get("versi_aplikasi")},
-            "perangkat": info,
-            "judul": rencana.get("judul"),
-            "tujuan": rencana.get("tujuan"),
-            "peran": p.peran_aktif,
-            "waktu_mulai": mulai,
-            "berhasil": berhasil,
-            "durasi_total_ms": round((time.perf_counter() - t0) * 1000),
-            "rekaman": video,
-            "izinkan_aksi_berisiko": izinkan_berisiko,
-            "beri_izin_otomatis": p.beri_izin,
-            "izin_otomatis": p.izin_otomatis,
-            "catatan_metode": CATATAN_METODE,
-            "langkah": p.langkah,
-            "layar_akhir": daftar_elemen(p.xml_terakhir, p.density) if p.xml_terakhir else [],
-        }
-        (folder / "ringkasan.json").write_text(json.dumps(ringkasan, ensure_ascii=False, indent=2),
-                                               encoding="utf-8")
+        p.kembalikan_pengaturan_hp()
+        tulis_ringkasan(p, rencana, info, mulai, t0, berhasil, video, izinkan_berisiko)
         try:
             driver.quit()
         except Exception:
             pass
+    return hasil_run(p, berhasil, video, folder)
 
-    gagal = next((l for l in p.langkah if not l["berhasil"]), None)
-    log(f"\n{'BERHASIL' if berhasil else 'TIDAK BERHASIL'}. Hasil: {folder}")
-    return {
-        "status": "selesai" if berhasil else "gagal_langkah",
-        "berhasil": berhasil,
-        "folder": str(folder),
-        "ringkasan": str(folder / "ringkasan.json"),
-        "jumlah_langkah": len(p.langkah),
-        "langkah_gagal": ({"no": gagal["no"], "langkah": gagal["langkah"], "galat": gagal["galat"],
-                           "screenshot": gagal["screenshot"]} if gagal else None),
-        "rekaman": video,
-    }
+
+# ====================================================================== penjelajah otomatis (tanpa LLM)
+def _norm_label(teks):
+    """Label untuk mengenali layar/elemen yang sama walau datanya berbeda: penanda data uji dan angka jadi '#',
+    emoji/simbol dibuang, huruf kecil."""
+    t = re.sub(r"UJI-\d{4}-\d{6}", "#", str(teks or "").split("\n")[0])
+    t = re.sub(r"[^\w#/ .,:'()-]+", " ", re.sub(r"\d+", "#", t))
+    t = re.sub(r"#(\s*#)+", "#", t)
+    return " ".join(t.split()).lower()[:40]
+
+
+def tanda_layar(root):
+    """Sidik layar dari label elemen (angka diganti #, teks panjang diabaikan): layar yang sama tetap dikenali
+    walau datanya berubah."""
+    return frozenset(((el.get("class") or "").split(".")[-1], _norm_label(_label(el)))
+                     for el in root.iter() if _label(el) and len(_label(el)) <= 60 and _bounds(el.get("bounds")))
+
+
+def mirip(a, b):
+    return 1.0 if not a and not b else len(a & b) / max(1, len(a | b))
+
+
+def judul_layar(root):
+    label = [_label(el).replace("\n", " ") for el in root.iter() if _label(el) and el.get("heading") == "true"]
+    label += [_label(el).replace("\n", " ") for el in root.iter() if _label(el)]
+    return " / ".join(dict.fromkeys(label[:3]))[:70] or "(tanpa teks)"
+
+
+class Penjelajah:
+    """Mengetuk SEMUA elemen yang bisa dijangkau di setiap layar aplikasi, tanpa mengubah data: menggulir untuk
+    menemukan elemen di bawah, membuka lembar bawah/dialog, berpindah tab, dan kembali lewat Back atau tab semula.
+    Item daftar yang sejenis cukup diwakili beberapa contoh. Tombol yang mengubah data dicatat 'diblokir' (bahan uji
+    CRUD oleh LLM Perancang). Kalau tersesat, aplikasi dimulai ulang lalu jalur menuju layar diputar ulang."""
+
+    def __init__(self, p, batas_ketukan=300, batas_menit=40.0, maks_kedalaman=6, maks_per_grup=2):
+        self.p = p
+        self.batas_ketukan, self.batas_detik = batas_ketukan, batas_menit * 60
+        self.maks_kedalaman, self.maks_per_grup = maks_kedalaman, maks_per_grup
+        self.layar, self.status, self.posisi_tetap, self.grup = [], {}, {}, {}
+        self.ketukan, self.pemulihan, self.t0 = 0, 0, time.perf_counter()
+        p.saring_screenshot = self.perlu_screenshot
+
+    # ---------- keadaan layar
+    def habis(self):
+        return self.ketukan >= self.batas_ketukan or time.perf_counter() - self.t0 > self.batas_detik
+
+    def baca(self):
+        xml = self.p.page_source_aman()
+        try:
+            return _root(xml) if xml else None
+        except ET.ParseError:
+            return None
+
+    def cari_layar(self, root):
+        tanda, paket = tanda_layar(root), paket_xml(root)
+        nilai = [(mirip(L["tanda"], tanda), L) for L in self.layar if L["paket"] == paket]
+        n, L = max(nilai, key=lambda x: x[0], default=(0, None))
+        return L if n >= 0.6 else None
+
+    def kenali(self, root, jalur=None, dari=None, ref=None, screenshot=None):
+        L = self.cari_layar(root)
+        if L is not None:
+            return L, False
+        L = {"id": f"J{len(self.layar) + 1}", "tanda": tanda_layar(root), "paket": paket_xml(root), "jalur": jalur or [],
+             "dari": dari, "judul": judul_layar(root), "ref": ref, "screenshot": screenshot, "tab_terpilih": None}
+        self.layar.append(L)
+        return L, True
+
+    def perlu_screenshot(self, xml):
+        try:
+            root = _root(xml)
+        except ET.ParseError:
+            return True
+        return paket_xml(root) == self.p.pkg and self.cari_layar(root) is None
+
+    def cocok(self, root, L):
+        return root is not None and paket_xml(root) == L["paket"] and mirip(tanda_layar(root), L["tanda"]) >= 0.6
+
+    # ---------- elemen yang bisa dijelajah di satu layar
+    def kandidat(self, root, L):
+        urut, induk = pohon_induk(root)
+        kotak_berlabel = {el.get("bounds") for el in urut if el.get("clickable") == "true" and _label(el)}
+        calon = []
+        for el in urut:
+            b = _bounds(el.get("bounds"))
+            kelas = el.get("class") or ""
+            if not b or el.get("clickable") != "true" or el.get("enabled") == "false" or kelas == "android.widget.EditText":
+                continue
+            lb = _label(el)
+            if not lb and el.get("bounds") in kotak_berlabel:
+                continue  # pembungkus kembar tanpa label: tombol berlabelnya yang diketuk
+            turunan = [_label(c) for c in el.iter() if c is not el and _label(c)]
+            nama = lb or (turunan[0] if turunan else "")
+            if lb:
+                atr = "content-desc" if el.get("content-desc") == lb else "text"
+                sama = [x for x in urut if x.get(atr) == lb and _bounds(x.get("bounds"))]
+                k = sama.index(el) if el in sama else 0
+                target = {"label": lb, **({"urutan": k} if len(sama) > 1 else {})}
+            elif turunan:
+                target = {"label_mengandung": turunan[0].split("\n")[0][:60]}
+            else:
+                target = {"koordinat": [(b[0] + b[2]) // 2, (b[1] + b[3]) // 2]}
+            kunci_label = lb[:60] if lb else (f"[{kelas.split('.')[-1]}] {nama[:50]}" if nama else
+                                              f"[{kelas.split('.')[-1]}]@{(b[0] + b[2]) // 120},{(b[1] + b[3]) // 120}")
+            tetap = self.posisi_tetap.get((kunci_label, el.get("bounds")))
+            kunci = tetap or f"{L['id']}|{kunci_label}" + (f"#{target['urutan']}" if target.get("urutan") else "")
+            self.posisi_tetap.setdefault((kunci_label, el.get("bounds")), kunci)
+            sc = _scroll_terdekat(el, induk)
+            grup = (L["id"], sc.get("bounds") if sc is not None else "layar", kelas, b[0] // 30,
+                    (b[2] - b[0]) // 30, (b[3] - b[1]) // 30)
+            calon.append({"kunci": kunci, "nama": nama.replace("\n", " ")[:80], "kelas": kelas.split(".")[-1],
+                          "target": target, "bounds": el.get("bounds"), "grup": grup,
+                          "terpilih": el.get("selected") == "true", "risiko": jenis_risiko(nama)})
+        ukuran = {}
+        for c in calon:
+            if c["grup"]:
+                ukuran[c["grup"]] = ukuran.get(c["grup"], 0) + 1
+        baris = {}
+        for c in calon:
+            if c["grup"] and ukuran[c["grup"]] < 3:
+                c["grup"] = None  # bukan daftar
+            b = _bounds(c["bounds"])
+            baris.setdefault((c["kelas"], b[1] // 20, (b[3] - b[1]) // 20), []).append(c)
+        for anggota in baris.values():  # baris tab: >= 2 elemen sejajar, tepat satu yang terpilih
+            if len(anggota) >= 2 and sum(1 for c in anggota if c["terpilih"]) == 1:
+                for c in anggota:
+                    c["tab"] = True
+                    if c["terpilih"] and L.get("tab_terpilih") is None:
+                        L["tab_terpilih"] = c["target"]
+        for c in calon:
+            self.status.setdefault(c["kunci"], {"layar": L["id"], "label": c["nama"] or None, "kelas": c["kelas"],
+                                                "status": "belum"})
+        return sorted(calon, key=lambda c: bool(c.get("tab")))  # isi layar dulu, tab terakhir
+
+    # ---------- aksi
+    def langkah_nav(self, s, aksi_catat="navigasi_otomatis"):
+        n0 = len(self.p.langkah)
+        ok = self.p.satu_langkah(0, {**s, "tanpa_pemulihan": True})
+        for lk in self.p.langkah[n0:]:
+            lk["aksi"] = aksi_catat
+        return ok
+
+    def tekan_kembali(self):
+        p = self.p
+        p.aksi_sekarang, p.rencana_ke = "kembali", None
+        p.catat_langkah(f"jelajah_kembali_{self.ketukan:03d}", aksi=p.d.back, xml_sebelum=p.page_source_aman(),
+                        catatan="penjelajah otomatis: kembali ke layar sebelumnya")
+        p.langkah[-1]["aksi"] = "navigasi_otomatis"
+
+    def pergi_ke(self, L):
+        """Kembali ke layar L: mulai dari layar sekarang kalau ada di jalur L, selain itu mulai ulang aplikasi lalu
+        putar ulang jalur ketukan dari layar awal."""
+        self.pemulihan += 1
+        if self.pemulihan > 80:
+            return False
+        root = self.baca()
+        kini = self.cari_layar(root) if root is not None and paket_xml(root) == self.p.pkg else None
+        ids = [lid for lid, _ in L["jalur"]]
+        if kini is not None and kini["id"] in ids:
+            sisa = L["jalur"][ids.index(kini["id"]):]
+        else:
+            self.p.mulai_ulang_app(0, f"penjelajah tersesat; kembali ke {L['id']}")
+            self.p.langkah[-1]["aksi"] = "navigasi_otomatis"
+            sisa = L["jalur"]
+        for _, target in sisa:
+            if self.habis():
+                return False
+            self.langkah_nav({"aksi": "tap", "nama": f"jelajah_menuju_{L['id']}", "target": target, "batas_cari_detik": 4,
+                              "catatan": f"penjelajah otomatis: menuju {L['id']}"})
+        return self.cocok(self.baca(), L)
+
+    def pastikan_di(self, L, lewat=None):
+        root = self.baca()
+        if self.cocok(root, L):
+            return True
+        kini = self.cari_layar(root) if root is not None and paket_xml(root) == self.p.pkg else None
+        if kini is not None and kini["id"] in [lid for lid, _ in L["jalur"]]:
+            return self.pergi_ke(L)  # lembar bawah/dialog tertutup sendiri: buka lagi dari layar induknya
+        if lewat and lewat.get("tab") and L.get("tab_terpilih") and not self.p.aplikasi_tidak_di_depan():
+            self.langkah_nav({"aksi": "tap", "nama": "jelajah_kembali_tab", "target": L["tab_terpilih"], "batas_cari_detik": 3,
+                              "catatan": "penjelajah otomatis: kembali lewat tab semula"})
+            if self.cocok(self.baca(), L):
+                return True
+        if not self.p.aplikasi_tidak_di_depan():
+            self.tekan_kembali()
+            if self.cocok(self.baca(), L):
+                return True
+        if self.p.aplikasi_tidak_di_depan():
+            self.p.catat_kembali_ke_app(0)
+            self.p.langkah[-1]["aksi"] = "navigasi_otomatis"
+            if self.cocok(self.baca(), L):
+                return True
+        return self.pergi_ke(L)
+
+    def ketuk(self, c, L):
+        p = self.p
+        self.ketukan += 1
+        n0 = len(p.langkah)
+        p.satu_langkah(0, {"aksi": "tap", "nama": f"jelajah_{self.ketukan:03d}_{_slug(c['nama'] or c['kelas'], 40)}",
+                           "target": c["target"], "batas_cari_detik": 2, "tanpa_pemulihan": True,
+                           "catatan": f"penjelajah otomatis: {L['id']} -> '{c['nama'] or c['kelas']}'"})
+        lk = p.langkah[n0] if len(p.langkah) > n0 else None
+        if lk is None:
+            return "gagal", None, None
+        lk["jelajah"] = {"layar": L["id"], "kunci": c["kunci"]}
+        if not lk["berhasil"]:
+            if lk.get("tak_terjangkau"):
+                return "tak_terjangkau", lk, None
+            if lk.get("diblokir"):
+                return "diblokir", lk, None
+            return ("crash" if lk.get("crash") else "keluar_aplikasi" if lk.get("keluar_aplikasi") else "gagal"), lk, None
+        if lk.get("keluar_aplikasi"):
+            return "aplikasi_lain", lk, None
+        if lk.get("tanpa_perubahan"):
+            return "tanpa_perubahan", lk, None
+        root = _root(p.xml_terakhir) if p.xml_terakhir else None
+        if root is None or self.cocok(root, L):
+            return "berubah", lk, None
+        L2, baru = self.kenali(root, jalur=L["jalur"] + [(L["id"], c["target"])], dari=L["id"], ref=lk["no"],
+                               screenshot=lk.get("screenshot"))
+        return ("layar_baru" if baru else "layar_lama"), lk, L2
+
+    def gulir(self, arah):
+        p = self.p
+        p.aksi_sekarang, p.rencana_ke = "gulir", None
+        p.catat_langkah(f"jelajah_gulir_{arah}", aksi=lambda: p.gulir_ke(None, None, {}, arah=arah, porsi=0.6), stabil=False,
+                        catatan="penjelajah otomatis: menggulir untuk menemukan elemen lain")
+        p.langkah[-1]["aksi"] = "navigasi_otomatis"
+
+    # ---------- penjelajahan
+    def jelajahi(self, L, kedalaman=0):
+        digulir, buntu = 0, 0
+        while not self.habis():
+            root = self.baca()
+            if not self.cocok(root, L):
+                if not self.pastikan_di(L):
+                    log(f"  penjelajah: {L['id']} tidak bisa dicapai lagi; sisa elemennya dilewati")
+                    return
+                continue
+            calon = self.kandidat(root, L)
+            belum = [c for c in calon if self.status[c["kunci"]]["status"] == "belum"]
+            if not belum:
+                if any(el.get("scrollable") == "true" for el in root.iter()) and digulir < 6 and buntu < 1:
+                    sebelum = {c["kunci"] for c in calon}
+                    self.gulir("bawah")
+                    digulir += 1
+                    root2 = self.baca()
+                    if root2 is None or {c["kunci"] for c in self.kandidat(root2, L)} <= sebelum:
+                        buntu += 1
+                    continue
+                break
+            c = belum[0]
+            st = self.status[c["kunci"]]
+            if c["risiko"]:
+                st.update(status="diblokir", alasan=f"mengubah data/berisiko ({c['risiko']}); diuji lewat CRUD Perancang")
+                continue
+            g = self.grup.setdefault(c["grup"], {"n": 0, "tujuan": set()}) if c["grup"] else None
+            if g is not None and g["n"] >= self.maks_per_grup and len(g["tujuan"]) <= 1:
+                st.update(status="diwakili", alasan=f"item sejenis; {g['n']} contoh sudah dijelajah dan menuju layar yang sama")
+                continue
+            hasil, lk, L2 = self.ketuk(c, L)
+            if g is not None:
+                g["n"] += 1
+                g["tujuan"].add(L2["id"] if L2 else hasil)
+            st.update(status="dijelajah" if hasil not in ("tak_terjangkau", "diblokir", "gagal") else hasil,
+                      hasil=hasil + (f" {L2['id']}" if L2 else ""), ref=lk["no"] if lk else None)
+            if lk is not None and lk.get("galat") and hasil in ("tak_terjangkau", "diblokir", "gagal"):
+                st["alasan"] = lk["galat"]
+            if hasil in ("tanpa_perubahan", "berubah"):
+                continue
+            if hasil == "layar_baru" and L2 is not None and kedalaman < self.maks_kedalaman:
+                log(f"  penjelajah: layar baru {L2['id']} ({L2['judul']}) dari {L['id']}")
+                self.jelajahi(L2, kedalaman + 1)
+            if not self.pastikan_di(L, c):
+                log(f"  penjelajah: gagal kembali ke {L['id']}")
+                return
+        for _ in range(digulir):
+            if self.cocok(self.baca(), L):
+                self.gulir("atas")
+
+    def jalan(self):
+        p = self.p
+        p.aksi_sekarang, p.rencana_ke = "tangkap", None
+        p.catat_langkah("jelajah_layar_awal", stabil=False, catatan="penjelajah otomatis: layar awal")
+        root = _root(p.xml_terakhir) if p.xml_terakhir else None
+        if root is None or paket_xml(root) != p.pkg:
+            raise Gagal("penjelajah: aplikasi tidak tampil di layar awal")
+        akar, _ = self.kenali(root, ref=p.langkah[-1]["no"], screenshot=p.langkah[-1].get("screenshot"))
+        self.jelajahi(akar)
+
+    def hasil(self):
+        app = [L for L in self.layar if L["paket"] == self.p.pkg]
+        id_app = {L["id"] for L in app}
+        elemen = [e for e in self.status.values() if e["layar"] in id_app]
+        hitung = {}
+        for e in elemen:
+            hitung[e["status"]] = hitung.get(e["status"], 0) + 1
+        return {
+            "layar": [{"id": L["id"], "judul": L["judul"], "dari": L["dari"], "ref": L["ref"], "screenshot": L["screenshot"],
+                       "jalur": [t.get("label") or t.get("label_mengandung") or str(t.get("koordinat")) for _, t in L["jalur"]]}
+                      for L in app],
+            "elemen": elemen,
+            "statistik": {"layar": len(app), "elemen": len(elemen), "ketukan": self.ketukan,
+                          "pemulihan_jalur": self.pemulihan, "durasi_detik": round(time.perf_counter() - self.t0),
+                          "habis_anggaran": self.habis(), **hitung},
+        }
+
+
+def jalankan_jelajah(rencana, cfg, rekam=False, folder=None):
+    """Run penjelajah otomatis: buka aplikasi (+ login), lalu jelajahi semua elemen. Hasilnya berformat sama dengan
+    run rencana (ringkasan.json) ditambah jelajah.json (layar, status tiap elemen, statistik)."""
+    kode_app = rencana["aplikasi"]
+    if kode_app not in cfg.get("aplikasi", {}):
+        raise Gagal(f"aplikasi '{kode_app}' tidak ada di akun.json")
+    peran = rencana.get("peran")
+    p, driver, info, folder = buka_pelaksana(kode_app, cfg, folder, False, rencana.get("judul", "jelajah_otomatis"))
+    (folder / "rencana.json").write_text(json.dumps(rencana, ensure_ascii=False, indent=2), encoding="utf-8")
+    p.peran_aktif = peran
+    p.beri_izin = rencana.get("beri_izin_otomatis", p.beri_izin)
+    p.izin_ulang("awal uji")
+    if p.beri_izin:
+        p.aktifkan_autostart()
+    mulai, t0 = datetime.now().isoformat(timespec="seconds"), time.perf_counter()
+    j = Penjelajah(p, int(rencana.get("batas_ketukan", 300)), float(rencana.get("batas_menit", 40)),
+                   maks_per_grup=int(rencana.get("maks_per_grup", 2)))
+    p.saring_screenshot = None  # langkah pembuka selalu dengan screenshot
+    berhasil, video, data = False, None, None
+    p.mulai_log()
+    sedang_rekam = rekam and p.mulai_rekam()
+    p.t_acuan = time.perf_counter()
+    try:
+        pembuka = [{"aksi": "buka_aplikasi", "nama": "buka_aplikasi"}]
+        if peran:
+            pembuka.append({"aksi": "login", "nama": f"login_{peran}", "peran": peran})
+        if all(p.satu_langkah(i, s) for i, s in enumerate(pembuka, 1)):
+            p.saring_screenshot = j.perlu_screenshot
+            j.jalan()
+            berhasil = True
+    finally:
+        if sedang_rekam:
+            video = p.selesai_rekam()
+        p.kembalikan_pengaturan_hp()
+        data = j.hasil()
+        (folder / "jelajah.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tulis_ringkasan(p, rencana, info, mulai, t0, berhasil, video, False, tambahan={"jelajah": data["statistik"]})
+        try:
+            driver.quit()
+        except Exception:
+            pass
+    h = hasil_run(p, berhasil, video, folder)
+    h["status"] = "selesai" if berhasil else "gagal_langkah"
+    h["berhasil"] = berhasil
+    h["jelajah"] = data["statistik"]
+    log(f"Penjelajah: {data['statistik']}")
+    return h
 
 
 def perintah_lihat(args, cfg):
@@ -1673,7 +2957,9 @@ SKEMA = """FORMAT RENCANA UJI (JSON) UNTUK agen_uji.py
   "judul": "nama_singkat_tanpa_spasi",
   "tujuan": "apa yang ingin dinilai dari uji ini",
   "peran": "(opsional) peran aktif kalau rencana tidak diawali login",
-  "langkah": [ ... maksimal 40 langkah ... ]
+  "tugas": ["(opsional) id tugas dari DAFTAR UJI MENDALAM yang dikerjakan rencana ini"],
+  "langkah": [ ... maksimal 40 langkah ... ],
+  "pemulihan": [ ... (wajib kalau ada "ubah_data": "buat"/"ubah") langkah pengembali data, maks. 25 ... ]
 }
 
 AKSI YANG TERSEDIA
@@ -1686,45 +2972,76 @@ AKSI YANG TERSEDIA
 - {"aksi":"kembali","nama":"..."}                            tombol back Android
 - {"aksi":"tunggu","nama":"...","detik":2}
 - {"aksi":"tangkap","nama":"..."}                            hanya ambil screenshot dan struktur layar
-- {"aksi":"atur_skala_font","nama":"...","skala":1.3}        ukuran huruf sistem 0.85-2.0 (uji teks besar);
-                                                             dikembalikan otomatis di akhir uji
+- {"aksi":"pastikan_ada","nama":"...","target":{...}}        pemeriksaan: elemen harus ada (dicari sambil menggulir)
+- {"aksi":"pastikan_tidak_ada","nama":"...","target":{...}}  pemeriksaan: elemen tidak boleh ada (bukti data terhapus)
+- {"aksi":"atur_skala_font","nama":"...","skala":1.3}        ukuran huruf sistem 0.85-2.0 (uji teks besar)
+- {"aksi":"atur_tema","nama":"...","tema":"gelap|terang"}    tema sistem (uji mode gelap)
+- {"aksi":"atur_jaringan","nama":"...","status":"mati|hidup"} mode pesawat (uji tanpa internet)
+  Skala font, tema, dan jaringan dikembalikan otomatis di akhir uji.
 
 TARGET ELEMEN (utamakan "label" persis dari daftar elemen layar)
   {"label":"Teks persis"}            {"label_mengandung":"potongan teks"}
   {"hint":"placeholder kolom"}       {"id":"resource-id"}
   {"kelas":"EditText","urutan":0}    "kelas"/"urutan" boleh digabung dengan "label"
   {"koordinat":[x,y]}                hanya untuk tap, pilihan terakhir (pakai "pusat" dari daftar elemen)
+Pelaksana hanya mengetuk bagian elemen yang terlihat dan menggulir sendiri kalau elemen tertutup bilah navigasi.
 
 OPSI PER LANGKAH
-  "tunggu_muncul": {target}    elemen yang harus muncul setelah aksi (dipakai mengukur waktu respons)
+  "tunggu_muncul": {target}    elemen STATIS yang pasti muncul setelah aksi (judul layar/label menu), untuk mengukur
+                               waktu respons. JANGAN pakai teks yang berisi angka/data yang bisa berubah.
   "tunggu_hilang": {target}    elemen yang harus hilang setelah aksi
   "batas_detik": 15            batas waktu tunggu
-  "lanjut_jika_gagal": true    rencana tetap lanjut walau langkah ini gagal
+  "berhenti_jika_gagal": true  hentikan rencana kalau langkah ini gagal (bawaan: pelaksana memulihkan keadaan
+                               lalu lanjut ke langkah berikutnya)
+  "ubah_data": "buat|ubah|hapus|status"  WAJIB untuk tap yang menyimpan/mengirim/menghapus/menyetujui (hanya kalau
+                               sesi mengizinkan CRUD); "biarkan" = sakelar tidak dikembalikan otomatis
+  "objek": "..."               nama data yang diubah, mis. "pengajuan kas kecil"
   "paksa_login_ulang": true    (khusus login) login ulang walau sesi peran yang sama masih aktif
-Tingkat rencana: "beri_izin_otomatis": false  izin TIDAK diberikan lewat adb di awal (untuk menilai alur izin);
-  kalau aplikasi membuka Pengaturan sistem, pelaksana tetap menyalakan izinnya lalu kembali ke aplikasi.
   "catatan": "..."             alasan langkah ini, untuk evaluator
+Tingkat rencana: "beri_izin_otomatis": false  izin TIDAK diberikan lewat adb di awal (untuk menilai alur izin).
+
+NILAI KHUSUS DI "teks" DAN TARGET
+  {penanda}                    diganti kode unik run ini (mis. UJI-1112-153012). Tulis di kolom teks utama setiap data
+                               yang dibuat, lalu cari/hapus data itu lewat {"label_mengandung": "{penanda}"}.
+  {nilai_awal:nama_langkah}    isi kolom SEBELUM langkah ketik bernama itu mengubahnya (untuk mengembalikan isian).
 
 ATURAN
 1. Pakai label persis seperti di daftar elemen layar terbaru; jangan menebak elemen yang belum terlihat.
 2. Kalau label berisi baris baru, pakai "label_mengandung" dengan potongan satu baris.
 3. Jangan pernah menulis kata sandi atau data akun; untuk login pakai aksi "login".
-   Tombol yang mengubah data atau keluar dari aplikasi (hapus, simpan, kirim, bayar, keluar,
-   WhatsApp, telepon, konfirmasi, ...) diblokir oleh pelaksana.
-4. Setiap tap yang berpindah layar sebaiknya punya "tunggu_muncul" supaya waktu responsnya terukur.
-5. Beri "nama" yang deskriptif: huruf kecil dan garis bawah.
-6. Keluarkan HANYA objek JSON rencana, tanpa teks lain.
+4. Selalu diblokir: pembayaran, WhatsApp/telepon/SMS/email, hapus/nonaktifkan akun, ganti kata sandi dan verifikasi
+   2 langkah akun uji. Tanpa izin CRUD, semua tombol simpan/kirim/hapus/setujui/keluar juga diblokir.
+5. Hapus/ubah status (hapus, setujui, tolak, akui, selesaikan, abaikan, batalkan, ...) hanya pada data buatan uji:
+   baris/halaman yang diketuk harus memuat penanda data uji.
+6. Setelah membuka lembar bawah/dialog, tutup dulu (kembali, atau tombol tutup/batal) sebelum mengetuk elemen di
+   layar di bawahnya.
+7. Beri "nama" yang deskriptif: huruf kecil dan garis bawah.
+8. Keluarkan HANYA objek JSON rencana, tanpa teks lain.
 
-CONTOH
+CONTOH CRUD DENGAN PEMULIHAN
 {
   "aplikasi": "santamaria",
-  "judul": "login_owner_buka_menu",
-  "tujuan": "Aksesibilitas dan waktu respons dari login owner sampai beranda",
+  "judul": "crud_pengajuan_kas_kecil",
+  "tujuan": "Validasi form pengajuan kas kecil lalu buat, periksa, dan hapus data uji",
+  "tugas": ["form:L8"],
   "langkah": [
     {"aksi": "buka_aplikasi", "nama": "buka_aplikasi"},
     {"aksi": "login", "nama": "login_owner", "peran": "owner"},
-    {"aksi": "gulir", "nama": "gulir_beranda", "arah": "bawah"},
-    {"aksi": "tangkap", "nama": "beranda_bawah"}
+    {"aksi": "tap", "nama": "buka_kas_kecil", "target": {"label_mengandung": "Pengajuan Kas Kecil"}},
+    {"aksi": "tap", "nama": "kirim_kosong", "target": {"label": "Ajukan"}, "ubah_data": "buat", "objek": "pengajuan kas kecil",
+     "catatan": "form kosong harus ditolak dengan pesan yang jelas"},
+    {"aksi": "ketik", "nama": "isi_keperluan", "target": {"hint": "Keperluan"}, "teks": "Uji otomatis {penanda}"},
+    {"aksi": "ketik", "nama": "isi_nominal", "target": {"hint": "Nominal"}, "teks": "-5000"},
+    {"aksi": "tap", "nama": "ajukan_nominal_negatif", "target": {"label": "Ajukan"}, "ubah_data": "buat",
+     "objek": "pengajuan kas kecil"},
+    {"aksi": "ketik", "nama": "isi_nominal_benar", "target": {"hint": "Nominal"}, "teks": "15000"},
+    {"aksi": "tap", "nama": "ajukan", "target": {"label": "Ajukan"}, "ubah_data": "buat", "objek": "pengajuan kas kecil"},
+    {"aksi": "pastikan_ada", "nama": "data_uji_tampil", "target": {"label_mengandung": "{penanda}"}}
+  ],
+  "pemulihan": [
+    {"aksi": "tap", "nama": "buka_data_uji", "target": {"label_mengandung": "{penanda}"}},
+    {"aksi": "tap", "nama": "hapus_data_uji", "target": {"label": "Hapus"}, "ubah_data": "hapus", "objek": "pengajuan kas kecil"},
+    {"aksi": "pastikan_tidak_ada", "nama": "data_uji_hilang", "target": {"label_mengandung": "{penanda}"}}
   ]
 }
 """
@@ -1773,6 +3090,14 @@ def main(argv=None):
     pp.add_argument("--app", help="hanya aplikasi ini (bawaan: semua di akun.json)")
     pp.add_argument("--paksa", action="store_true", help="periksa ulang Autostart walau tercatat sudah aktif")
 
+    pz = sub.add_parser("jelajahi", help="penjelajah otomatis: ketuk semua elemen yang bisa dijangkau (tanpa LLM, "
+                                         "tanpa mengubah data)")
+    pz.add_argument("--app", required=True)
+    pz.add_argument("--peran", help="login sebagai peran ini dulu")
+    pz.add_argument("--batas-ketukan", type=int, default=300)
+    pz.add_argument("--batas-menit", type=float, default=40)
+    pz.add_argument("--rekam", action="store_true", help="rekam layar (3 menit pertama)")
+
     pa = sub.add_parser("analisis", help="analisis file XML struktur layar, tanpa HP")
     pa.add_argument("xml")
     pa.add_argument("--density", type=float, help="faktor density = dpi/160, misalnya 2.75")
@@ -1790,6 +3115,17 @@ def main(argv=None):
             return 0
         if args.perintah == "siapkan":
             print(json.dumps(perintah_siapkan(args, cfg), ensure_ascii=False))
+            return 0
+        if args.perintah == "jelajahi":
+            app = cfg.get("aplikasi", {}).get(args.app)
+            if app is None:
+                raise Gagal(f"aplikasi '{args.app}' tidak ada di akun.json")
+            if args.peran and args.peran not in app.get("akun", {}):
+                raise Gagal(f"peran '{args.peran}' tidak ada untuk {args.app}")
+            hasil = jalankan_jelajah({"jenis": "jelajah_otomatis", "aplikasi": args.app, "peran": args.peran,
+                                      "judul": f"jelajah_{args.peran or 'tanpa_login'}", "batas_ketukan": args.batas_ketukan,
+                                      "batas_menit": args.batas_menit}, cfg, rekam=args.rekam)
+            print(json.dumps(hasil, ensure_ascii=False))
             return 0
         if args.perintah == "lihat":
             if args.app not in cfg.get("aplikasi", {}):

@@ -20,12 +20,14 @@ PKG_WASIAT = "id.co.santamaria.wasiat"
 PKG_GMS = "com.google.android.gms"
 PKG_SETELAN = "com.android.settings"
 PKG_KEAMANAN = "com.miui.securitycenter"
+PKG_DEMO = "id.contoh.demo"
 LABEL_APP = {PKG: "Santa Maria", PKG_WASIAT: "Wasiat", "id.co.santamaria.yayasan": "Yayasan Sosial Santa Maria",
              "com.android.chrome": "Chrome"}
 # Daftar Autostart panjang (seperti HP sungguhan): aplikasi uji ada jauh di bawah, tidak terlihat tanpa Cari/gulir.
 DAFTAR_AUTOSTART = (["com.android.chrome"] + [f"com.contoh.app{i:02d}" for i in range(1, 30)]
                     + ["id.co.santamaria.yayasan", PKG, PKG_WASIAT])
 LABEL_APP.update({f"com.contoh.app{i:02d}": f"Aplikasi Contoh {i:02d}" for i in range(1, 30)})
+NAV_Y = 2568  # bilah navigasi 3 tombol (48 dp) di bawah layar 1220x2712
 IZIN_NOTIF = "android.permission.POST_NOTIFICATIONS"
 IZIN_DIMINTA = [IZIN_NOTIF, "android.permission.CAMERA", "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_BACKGROUND_LOCATION"]
@@ -95,7 +97,7 @@ LAYAR = {
     "w_pemilih": layar(
         node("android.widget.TextView", pkg=PKG_GMS, text="Pilih akun", bounds="[80,1500][1140,1580]"),
         node("android.widget.LinearLayout", pkg=PKG_GMS, clickable="true", bounds="[0,1600][1220,1760]", anak=(
-            node("android.widget.TextView", pkg=PKG_GMS, text="Nevin Uji", bounds="[160,1610][1100,1680]")
+            node("android.widget.TextView", pkg=PKG_GMS, text="Pengguna Uji", bounds="[160,1610][1100,1680]")
             + node("android.widget.TextView", pkg=PKG_GMS, text="uji.wasiat@gmail.com", bounds="[160,1690][1100,1750]"))),
         node("android.widget.LinearLayout", pkg=PKG_GMS, clickable="true", bounds="[0,1780][1220,1940]", anak=(
             node("android.widget.TextView", pkg=PKG_GMS, text="Akun Lain", bounds="[160,1790][1100,1860]")
@@ -230,6 +232,11 @@ class Sim:
         self.adb_tidak_ada = False                # simulasi adb tidak terpasang di komputer
         self.pulih_setelah_reconnect = False      # 'adb reconnect offline' memulihkan HP yang offline
         self.udid_terakhir = None                 # udid yang dikirim ke Appium
+        self.logcat = []                          # (epoch, pid, tingkat, tag, pesan)
+        self.tema = "no"                          # cmd uimode night
+        self.pesawat = False                      # mode pesawat
+        self.d_pesanan = [f"Pesanan #{i}" for i in range(1, 7)]   # aplikasi demo
+        self.d_tergulir, self.d_fingerprint, self.d_detail, self.d_form = False, False, None, ""
         self.reset_login()
 
     def reset_login(self):
@@ -243,6 +250,9 @@ class Sim:
         self.transisi = None
         if self.app == "wasiat":
             self.layar = "w_home" if self.wasiat_login else "w_login"
+            return
+        if self.app == "demo":
+            self.layar, self.d_tergulir = "d_home", False
             return
         if self.izin_tertunda and IZIN_NOTIF in self.izin_runtime:
             self.izin_tertunda = False  # izin sudah diberikan lewat adb -> tidak ditanya lagi
@@ -261,6 +271,8 @@ class Sim:
             if fungsi:
                 fungsi()
             self.layar, self.tergulir = tujuan, False
+        if self.layar.startswith("d_"):
+            return ET.fromstring(demo_layar().encode("utf-8"))
         if self.layar == "login":
             return self.pohon_login
         if self.layar == "pengaturan":
@@ -294,7 +306,7 @@ def cocok(el, panggilan):
             "packageName": lambda: a("package") == v,
             "packageNameMatches": lambda: re.fullmatch(v, a("package")) is not None,
             "clickable": lambda: a("clickable") == v.strip(), "instance": lambda: True,
-            "checkable": lambda: a("checkable") == v.strip(),
+            "checkable": lambda: a("checkable") == v.strip(), "focused": lambda: a("focused") == v.strip(),
             "descriptionMatches": lambda: re.fullmatch(v, a("content-desc")) is not None,
             "textMatches": lambda: re.fullmatch(v, a("text")) is not None,
         }
@@ -317,6 +329,9 @@ class El:
         SIM.panggilan.append(("klik", cd or tx))
         if self.e.get("enabled") == "false":
             return  # tombol nonaktif tidak bereaksi
+        if SIM.layar.startswith("d_"):
+            demo_klik(cd)
+            return
         if SIM.layar == "daftar_autostart":
             if cd == "Cari":
                 SIM.cari_aktif = True
@@ -365,8 +380,14 @@ class El:
 
     def clear(self):
         self.e.set("text", "")
+        if SIM.layar == "d_form":
+            SIM.d_form = ""
 
     def send_keys(self, t):
+        if SIM.layar == "d_form":
+            SIM.d_form = t
+            SIM.keyboard = True
+            return
         if SIM.layar == "daftar_autostart":
             SIM.cari_teks = t
             SIM.keyboard = True
@@ -434,6 +455,8 @@ class Driver:
 
     @property
     def current_package(self):
+        if SIM.layar.startswith("d_"):
+            return PKG_DEMO
         if SIM.layar.startswith("w_"):
             SIM.pohon()  # jalankan transisi yang sudah jatuh tempo
             return PKG_GMS if SIM.layar == "w_pemilih" else PKG_WASIAT
@@ -467,6 +490,12 @@ class Driver:
 
     def back(self):
         SIM.transisi = None
+        if SIM.keyboard:  # Back menutup papan ketik dulu
+            SIM.keyboard = False
+            return
+        if SIM.layar.startswith("d_"):
+            demo_kembali()
+            return
         SIM.layar = "home" if SIM.layar in ("laporan", "memuat", "pengaturan", "mengambang") else "launcher"
 
     def update_settings(self, pengaturan):
@@ -475,10 +504,17 @@ class Driver:
     def get_window_size(self):
         return {"width": 1220, "height": 2712}
 
-    def execute_script(self, nama, args):
+    def execute_script(self, nama, args=None):
+        args = args or {}
+        if nama == "mobile: getSystemBars":
+            return {"statusBar": {"visible": True, "x": 0, "y": 0, "width": 1220, "height": 110},
+                    "navigationBar": {"visible": True, "x": 0, "y": NAV_Y, "width": 1220, "height": 2712 - NAV_Y}}
         SIM.panggilan.append(("script", nama, args.get("direction")))
-        if nama == "mobile: scrollGesture" and SIM.layar == "home":
-            SIM.tergulir = args["direction"] == "down"
+        if nama == "mobile: scrollGesture":
+            if SIM.layar == "home":
+                SIM.tergulir = args["direction"] == "down"
+            elif SIM.app == "demo":
+                demo_gulir(args["direction"])
         return False
 
     def tap(self, posisi, duration=None):
@@ -498,6 +534,15 @@ class Driver:
             SIM.overlay_ui = True
             SIM.panggilan.append(("sakelar_overlay", True))
             return
+        if y >= NAV_Y:  # bilah navigasi 3 tombol HP: kiri = terbaru, tengah = Home, kanan = Back
+            SIM.panggilan.append(("tombol_sistem", "home" if 407 <= x < 813 else "back" if x >= 813 else "terbaru"))
+            if 407 <= x < 813:
+                SIM.transisi, SIM.layar = None, "launcher"
+            elif x >= 813:
+                self.back()
+            return
+        if y < 110:
+            return
         if SIM.layar == "w_pemilih":
             for e in SIM.pohon().iter():
                 b = [int(v) for v in re.findall(r"-?\d+", e.get("bounds") or "")]
@@ -508,6 +553,13 @@ class Driver:
                         SIM.layar = "w_memuat"
                         SIM.jadwal("w_home", 0.8, lambda: setattr(SIM, "wasiat_login", email))
                     return
+        atas = None  # elemen yang bisa diklik dan digambar paling atas (terakhir dalam urutan dokumen)
+        for e in SIM.pohon().iter():
+            b = [int(v) for v in re.findall(r"-?\d+", e.get("bounds") or "")]
+            if e.get("clickable") == "true" and len(b) == 4 and b[0] <= x < b[2] and b[1] <= y < b[3]:
+                atas = e
+        if atas is not None:
+            El(atas).click()
 
     def start_recording_screen(self, **o):
         SIM.panggilan.append(("rekam_mulai", o))
@@ -521,6 +573,163 @@ class Driver:
         SIM.panggilan.append(("quit",))
 
 
+# ====================================================================== aplikasi demo (penjelajah otomatis + CRUD)
+def _d(cls, **a):
+    return node(cls, pkg=PKG_DEMO, **a)
+
+
+def _nav_demo(aktif):
+    hasil = ""
+    for (x1, x2), nama in zip(((48, 423), (423, 797), (797, 1172)), ("Dasbor", "Peta", "Profil")):
+        tombol = _d("android.widget.Button", content_desc=nama, clickable="true", selected="true" if nama == aktif else "false",
+                    bounds=f"[{x1},2324][{x2},2540]")
+        hasil += _d("android.view.View", clickable="true", bounds=f"[{x1},2324][{x2},2540]", anak=tombol)
+    return hasil
+
+
+def _geser(b, dy, batas_atas=600):
+    x1, y1, x2, y2 = b
+    return None if y2 - dy <= batas_atas else f"[{x1},{max(y1 - dy, batas_atas)}][{x2},{y2 - dy}]"
+
+
+def demo_layar():
+    L = SIM.layar
+    judul = lambda teks: _d("android.view.View", content_desc=teks, heading="true", bounds="[160,120][1000,260]")
+    kembali = _d("android.widget.Button", content_desc="Kembali", clickable="true", bounds="[20,130][140,250]")
+    if L == "d_home":
+        dy = 600 if SIM.d_tergulir else 0
+        isi = ""
+        for k, j in enumerate(SIM.d_pesanan):
+            b = _geser((40, 620 + k * 180, 1180, 780 + k * 180), dy)
+            if b:
+                isi += _d("android.view.View", content_desc=j, clickable="true", bounds=b)
+        y = 620 + len(SIM.d_pesanan) * 180 + 20  # tombol sesudah daftar; "Laporan Bulanan" di bawah bilah navigasi HP
+        for lb, b0 in (("Tombol Mati", (40, y, 1180, y + 140)),
+                       ("Laporan Bulanan", (40, max(2580, y + 180), 1180, max(2580, y + 180) + 120))):
+            b = _geser(b0, dy)
+            if b:
+                isi += _d("android.widget.Button", content_desc=lb, clickable="true", bounds=b)
+        return layar(judul("Dasbor Demo"),
+                     _d("android.widget.Button", content_desc="Notifikasi", clickable="true", bounds="[1040,130][1180,250]"),
+                     _d("android.widget.EditText", hint="Cari pesanan", clickable="true", bounds="[40,280][1180,420]"),
+                     _d("android.widget.Button", content_desc="Tambah Pesanan", clickable="true", bounds="[40,440][600,580]"),
+                     _d("android.widget.Button", content_desc="Muat ulang", clickable="true", bounds="[620,440][1180,580]"),
+                     _d("android.view.View", scrollable="true", bounds="[0,600][1220,2540]", anak=isi),
+                     _nav_demo("Dasbor"), pkg=PKG_DEMO)
+    if L == "d_peta":
+        return layar(judul("Peta"),
+                     _d("android.widget.Button", content_desc="Filter Nama", clickable="true", bounds="[40,300][600,440]"),
+                     _d("android.widget.Button", content_desc="Sinkronkan", clickable="true", bounds="[620,300][1180,440]"),
+                     _nav_demo("Peta"), pkg=PKG_DEMO)
+    if L == "d_profil":
+        return layar(judul("Profil"),
+                     _d("android.widget.Switch", content_desc="Fingerprint", clickable="true", checkable="true",
+                        checked="true" if SIM.d_fingerprint else "false", bounds="[40,300][1180,440]"),
+                     _d("android.widget.Button", content_desc="Ubah kata sandi", clickable="true", bounds="[40,460][1180,600]"),
+                     _d("android.widget.Button", content_desc="Keluar", clickable="true", bounds="[40,620][1180,760]"),
+                     _nav_demo("Profil"), pkg=PKG_DEMO)
+    if L == "d_notif":
+        return layar(kembali, judul("Notifikasi"),
+                     _d("android.view.View", content_desc="Total tagihan: NaN", bounds="[40,300][1180,400]"), pkg=PKG_DEMO)
+    if L == "d_laporan":
+        return layar(kembali, judul("Laporan Bulanan"),
+                     _d("android.view.View", content_desc="Sudah 9251 hari di atas toleransi", bounds="[40,300][1180,400]"),
+                     pkg=PKG_DEMO)
+    if L == "d_detail":
+        return layar(kembali, judul(f"Detail {SIM.d_detail}"),
+                     _d("android.widget.Button", content_desc="Hapus", clickable="true", bounds="[40,300][600,440]"),
+                     _d("android.widget.Button", content_desc="Selesaikan", clickable="true", bounds="[620,300][1180,440]"),
+                     pkg=PKG_DEMO)
+    if L == "d_form":
+        return layar(kembali, judul("Tambah Pesanan"),
+                     _d("android.widget.EditText", hint="Judul pesanan", text=SIM.d_form, clickable="true",
+                        bounds="[40,300][1180,440]"),
+                     _d("android.widget.Button", content_desc="Simpan", clickable="true", bounds="[40,460][1180,600]"),
+                     pkg=PKG_DEMO)
+    if L == "d_sandi":
+        return layar(kembali, judul("Ubah Kata Sandi"),
+                     _d("android.widget.EditText", hint="Kata sandi lama", password="true", clickable="true", bounds="[40,300][1180,440]"),
+                     _d("android.widget.EditText", hint="Kata sandi baru", password="true", clickable="true", bounds="[40,460][1180,600]"),
+                     _d("android.widget.Button", content_desc="Simpan", clickable="true", bounds="[40,620][1180,760]"),
+                     pkg=PKG_DEMO)
+    if L == "d_sheet":  # lembar bawah modal: layar di bawahnya tidak ada di pohon aksesibilitas
+        opsi = "".join(_d("android.view.View", content_desc=n, clickable="true", bounds=f"[0,{1500 + k * 150}][1220,{1640 + k * 150}]")
+                       for k, n in enumerate(("Semua", "Ani", "Budi", "Citra", "Dewi")))
+        return layar(_d("android.view.View", content_desc="Pilih Nama", heading="true", bounds="[40,1380][1180,1480]"), opsi,
+                     pkg=PKG_DEMO)
+    raise KeyError(L)
+
+
+def demo_gulir(arah):
+    if SIM.layar == "d_home":
+        SIM.d_tergulir = arah == "down"
+
+
+def demo_log(tingkat, tag, pesan):
+    SIM.logcat.append((time.time(), 4242, tingkat, tag, pesan))
+
+
+def demo_klik(cd):
+    L = SIM.layar
+    tab = {"Dasbor": "d_home", "Peta": "d_peta", "Profil": "d_profil"}
+    if cd in tab and L in ("d_home", "d_peta", "d_profil"):
+        SIM.layar = tab[cd]
+    elif cd == "Kembali":
+        demo_kembali()
+    elif L == "d_home":
+        if cd == "Notifikasi":
+            SIM.layar = "d_notif"
+        elif cd == "Tambah Pesanan":
+            SIM.layar, SIM.d_form = "d_form", ""
+        elif cd == "Muat ulang":
+            demo_log("I", "flutter", "DioException [bad response]: status code 500 saat memuat /api/pesanan")
+        elif cd == "Laporan Bulanan":
+            SIM.layar = "d_laporan"
+        elif cd in SIM.d_pesanan:
+            SIM.layar, SIM.d_detail = "d_detail", cd
+    elif L == "d_peta":
+        if cd == "Filter Nama":
+            SIM.layar = "d_sheet"
+        elif cd == "Sinkronkan":
+            demo_log("E", "AndroidRuntime", "FATAL EXCEPTION: main")
+            demo_log("E", "AndroidRuntime", "Process: id.contoh.demo, PID: 4242")
+            demo_log("E", "AndroidRuntime", "java.lang.IllegalStateException: sinkronisasi gagal")
+            SIM.layar = "launcher"
+    elif L == "d_sheet":
+        SIM.layar = "d_peta"
+    elif L == "d_profil":
+        if cd == "Fingerprint":
+            SIM.d_fingerprint = not SIM.d_fingerprint
+        elif cd == "Ubah kata sandi":
+            SIM.layar = "d_sandi"
+        elif cd == "Keluar":
+            SIM.panggilan.append(("demo_keluar",))
+    elif L == "d_form" and cd == "Simpan":
+        if SIM.d_form.strip():
+            SIM.d_pesanan.append(SIM.d_form.strip())
+            SIM.panggilan.append(("demo_buat", SIM.d_form.strip()))
+        SIM.layar = "d_home"
+    elif L == "d_detail":
+        if cd == "Hapus":
+            SIM.d_pesanan.remove(SIM.d_detail)
+            SIM.panggilan.append(("demo_hapus", SIM.d_detail))
+            SIM.layar = "d_home"
+        elif cd == "Selesaikan":
+            SIM.panggilan.append(("demo_selesaikan", SIM.d_detail))
+    elif L == "d_sandi" and cd == "Simpan":
+        SIM.panggilan.append(("demo_ganti_sandi",))
+
+
+def demo_kembali():
+    SIM.layar = {"d_notif": "d_home", "d_laporan": "d_home", "d_detail": "d_home", "d_form": "d_home",
+                 "d_sheet": "d_peta", "d_sandi": "d_profil"}.get(SIM.layar, "launcher")
+
+
+def demo_reset():
+    SIM.d_pesanan = [f"Pesanan #{i}" for i in range(1, 7)]
+    SIM.d_tergulir, SIM.d_fingerprint, SIM.d_detail, SIM.d_form = False, False, None, ""
+
+
 def adb_palsu(*args, timeout=60):
     s = " ".join(args)
     SIM.panggilan.append(("adb", s))
@@ -529,9 +738,30 @@ def adb_palsu(*args, timeout=60):
     for k, v in jawaban.items():
         if k in s:
             return v
+    if s == "shell date +%s":
+        return f"{int(time.time())}\n"
+    if s.startswith("shell pidof"):
+        return "4242\n" if args[-1] in (PKG, PKG_WASIAT, PKG_DEMO) else ""
+    if args[:1] == ("logcat",) or args[:1] == ["logcat"]:
+        sejak = float(args[args.index("-T") + 1]) if "-T" in args else 0.0
+        return "".join(f"{w:.3f}  {pid}  {pid} {lv} {tag}: {msg}\n" for w, pid, lv, tag, msg in SIM.logcat if w >= sejak)
+    if s == "shell settings get secure navigation_mode":
+        return "0\n"
+    if s == "shell cmd uimode night":
+        return f"Night mode: {SIM.tema}\n"
+    if s.startswith("shell cmd uimode night "):
+        SIM.tema = args[-1]
+        return f"Night mode: {SIM.tema}\n"
+    if s == "shell settings get global airplane_mode_on":
+        return "1\n" if SIM.pesawat else "0\n"
+    if s.startswith("shell cmd connectivity airplane-mode"):
+        SIM.pesawat = args[-1] == "enable"
+        return ""
     if s.startswith("shell pm path"):
-        return f"package:/data/app/~~sim/{args[-1]}-1/base.apk\n" if args[-1] in (PKG, PKG_WASIAT) else ""
+        return f"package:/data/app/~~sim/{args[-1]}-1/base.apk\n" if args[-1] in (PKG, PKG_WASIAT, PKG_DEMO) else ""
     if "dumpsys package" in s:
+        if PKG_DEMO in s:
+            return "    versionName=0.9.0\n"
         if PKG_WASIAT in s:
             return "    versionName=1.0.5\n"
         if PKG not in s:
@@ -580,7 +810,7 @@ def adb_palsu(*args, timeout=60):
         SIM.layar = "launcher"
         return ""
     if "am start" in s:
-        SIM.app = "wasiat" if PKG_WASIAT in s else "santamaria"
+        SIM.app = "wasiat" if PKG_WASIAT in s else "demo" if PKG_DEMO in s else "santamaria"
         SIM.buka()
         return "Status: ok\nLaunchState: COLD\nTotalTime: 812\nWaitTime: 820\nComplete\n" if "-W" in s else "Starting\n"
     return ""

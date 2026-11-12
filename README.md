@@ -3,18 +3,19 @@
 Untuk aplikasi **Santa Maria**, **Yayasan Santa Maria**, dan **Wasiat** (login Google) di HP Android (USB debugging).
 
 ```
-observasi awal (HP) ─► LLM Perancang ─► Pelaksana (Appium) ─► LLM Evaluator ─► yakin? ─ya─► laporan
-                            ▲                                                   │
-                            └──────────── permintaan uji ulang yang spesifik ◄──┘ belum (maks. N putaran)
+observasi awal ─► penjelajah otomatis ─► LLM Evaluator ─► LLM Perancang ─► Pelaksana ─► LLM Evaluator ─► ...
+                  (semua elemen, tanpa LLM)                (uji mendalam + CRUD)          │
+                                                                                       semua tercakup? ─ya─► pemulihan data ─► laporan
 ```
 
 - **LLM Perancang** melihat screenshot bernomor + daftar elemen layar, lalu menulis rencana uji (JSON).
 - **Pelaksana** (`agen_uji.py`) menjalankan rencana di HP: mengukur waktu respons, startup, metrik
   aksesibilitas/kerumitan per layar, screenshot, struktur layar (XML), dan rekaman layar. Hanya komponen ini
   yang memegang akun; LLM cuma melihat nama peran.
-- **LLM Evaluator** menilai semuanya (termasuk frame rekaman saat aplikasi memuat), menulis temuan berbasis
-  bukti, dan memberi nilai keyakinan. Di bawah ambang → ia menulis permintaan uji ulang yang spesifik untuk
-  Perancang. Di atas ambang → laporan dibuat.
+- **LLM Evaluator** menilai semuanya (termasuk frame rekaman saat aplikasi memuat dan log error aplikasi), menulis
+  temuan berbasis bukti beserta langkah reproduksi, dan meminta uji lanjutan yang spesifik kepada Perancang.
+- **Penjelajah otomatis** (bagian dari pelaksana, tanpa LLM) mengetuk semua elemen yang bisa dijangkau di setiap
+  layar. Ini yang membuat satu run mencakup semua fitur (lihat bagian Overtesting).
 
 ## Struktur repo
 
@@ -24,12 +25,12 @@ observasi awal (HP) ─► LLM Perancang ─► Pelaksana (Appium) ─► LLM Ev
 | `agen_uji.py` | pelaksana Appium (bisa juga dipakai sendiri) |
 | `akun.contoh.json` | templat akun uji per aplikasi; salin menjadi `akun.json` |
 | `llm.contoh.json` | templat koneksi 9router/LLM; salin menjadi `llm.json` lalu isi `api_key` |
-| `skenario.json` | daftar sesi uji (aplikasi, peran, tujuan), ambang keyakinan, maks. putaran, mode jelajah |
+| `skenario.json` | daftar sesi uji (aplikasi, peran, tujuan) dan pengaturan: mode overtesting, CRUD, batas putaran/waktu |
 | `aplikasi.json` | perilaku per aplikasi: nama di HP (`label_hp`) dan langkah melewati halaman izin aplikasi |
 | `prompt_perancang.md`, `prompt_evaluator.md` | system prompt kedua agen |
 | `n8n_workflow_uji_ui.json` | workflow n8n (import ke n8n) |
 | `contoh_rencana.json` | contoh format rencana uji |
-| `tests/` | simulator HP + server LLM tiruan + uji ujung-ke-ujung |
+| `tests/` | simulator HP (termasuk aplikasi demo), server LLM tiruan, uji ujung-ke-ujung |
 | `tools/buat_workflow.py` | pembuat ulang `n8n_workflow_uji_ui.json` |
 
 `akun.json` dan `llm.json` berisi kata sandi dan API key, jadi tidak ikut di-commit (lihat `.gitignore`).
@@ -90,6 +91,58 @@ python agen_uji.py siapkan
 ``` Untuk menilai alur permintaan izin aplikasi apa adanya, set `"beri_izin_otomatis": false` di
 `skenario.json` (atau di skenario tertentu).
 
+## Overtesting: semua fitur dalam satu run
+
+`skenario.json` bawaan memakai `"mode": "overtesting"` dan `"boleh_ubah_data": true`. Satu sesi berjalan begini:
+
+1. **Observasi awal** (buka aplikasi, login, layar pertama).
+2. **Penjelajah otomatis** (putaran 1, tanpa LLM) mengetuk setiap elemen yang bisa dijangkau di setiap layar:
+   menggulir untuk menemukan elemen di bawah, membuka lembar bawah/dialog, berpindah tab, lalu kembali lewat Back atau
+   tab semula. Kalau tersesat, aplikasi dibuka ulang dan jalur ketukan diputar ulang. Item daftar sejenis (nama,
+   pesanan, anomali) cukup diwakili dua contoh **kalau** keduanya menuju layar yang sama; menu yang menuju layar
+   berbeda tetap diketuk semua. Crash, error di log, tombol yang tidak bereaksi, dan elemen yang tak terjangkau
+   dicatat. Tombol pengubah data tidak diketuk di tahap ini.
+3. **Uji mendalam oleh LLM** (putaran berikutnya), mengikuti daftar uji yang dibuat otomatis dari layar yang
+   ditemukan:
+   - validasi form: kirim kosong, format salah, teks panjang, emoji;
+   - CRUD dengan pemulihan;
+   - pencarian dan filter;
+   - teks besar 1,3 dan 2,0;
+   - tema gelap;
+   - tanpa internet (mode pesawat);
+   - ketuk cepat berulang;
+   - konsistensi tombol Back.
+4. **Evaluator** mencari bug, crash, data janggal, cacat visual, dan tampilan yang kurang enak dilihat. Layar yang
+   belum pernah ia lihat didahulukan, supaya semua layar dinilai visual.
+5. Sesi berhenti kalau semua elemen, tugas uji, dan layar sudah tercakup dan semua data uji sudah dipulihkan, atau
+   kalau `maks_putaran` (14) / `batas_menit_sesi` (180) tercapai, atau 3 putaran tanpa kemajuan. Satu sesi bisa
+   makan waktu 1-3 jam, tergantung jumlah menu.
+
+**CRUD dan pemulihan data**
+- Data yang dibuat uji memuat penanda unik (mis. `UJI-1112-153012`) di kolom teksnya. Di akhir rencana, langkah
+  "pemulihan" menghapusnya lagi lalu memeriksa bahwa datanya sudah hilang.
+- Hapus dan ubah status (setujui, tolak, akui, selesaikan, abaikan, batalkan) **hanya boleh pada data berpenanda**.
+  Pelaksana memblokir tombol itu kalau baris atau halamannya tidak memuat penanda, jadi data lama tidak tersentuh.
+- Isian lama yang diubah dikembalikan. Sakelar pengaturan (mis. Fingerprint) dikembalikan otomatis. Skala font,
+  tema, dan jaringan HP juga dikembalikan di akhir setiap run.
+- Kalau masih ada data uji yang belum terhapus, orkestrator menjalankan **putaran pemulihan** sebelum laporan.
+  Laporan berisi tabel "Perubahan data dan pemulihan".
+- **Selalu diblokir**, juga dalam mode CRUD:
+  - pembayaran;
+  - WhatsApp, telepon, SMS, dan email;
+  - hapus atau nonaktifkan akun;
+  - ganti kata sandi dan mengaktifkan verifikasi 2 langkah akun uji, karena keduanya bisa mengunci akun uji.
+- Kalau punya akses server uji, isi `perintah_cadangan` dan `perintah_pulihkan` di `skenario.json` (perintah shell
+  di laptop ini, mis. skrip dump/restore database). Keduanya dijalankan sebelum sesi dan sebelum laporan sebagai
+  jaminan tambahan.
+
+Hanya penjelajah otomatis, tanpa LLM dan tanpa mengubah data:
+```
+python agen_uji.py jelajahi --app santamaria --peran owner
+```
+Mode lama (berhenti begitu evaluator yakin, tanpa CRUD): ubah `mode` menjadi `"evaluasi"` dan `boleh_ubah_data`
+menjadi `false`.
+
 ## Menjalankan dari terminal
 
 Terminal 1 (biarkan terbuka; tutup sesi Appium Inspector kalau sedang terbuka):
@@ -101,7 +154,7 @@ appium
 Terminal 2:
 
 ```
-cd <folder repo ini>
+cd D:\uji-ui-santamaria
 ```
 ```
 python orkestrator.py cek-llm
@@ -142,14 +195,23 @@ sesi_<waktu>_<aplikasi>_<peran>\
   laporan.html   ← buka ini (temuan + bukti screenshot, waktu, metrik per layar, cakupan)
   laporan.md / laporan.json
   observasi\     ← run awal (P0): screenshot, XML, ringkasan.json, rekaman.mp4
-  putaran_1\     ← rencana.json, uji\ (hasil pelaksana), evaluasi.json, frame\, llm_*.json (isi percakapan LLM)
-  putaran_2\ ...
+  putaran_1\     ← penjelajah otomatis: uji\jelajah.json (layar, status tiap elemen), ringkasan.json, screenshot layar baru
+  putaran_2\ ... ← rencana.json, uji\ (hasil pelaksana), evaluasi.json, frame\, llm_*.json (isi percakapan LLM)
 ringkasan_<waktu>.html   ← tabel semua aplikasi (perintah semua / n8n)
 ```
 
 Ref di laporan: `P1.4` = putaran 1 langkah 4; `L2` = layar unik ke-2; `L2-A1` = masalah A1 di layar L2.
-Kode masalah otomatis: **A** tanpa label, **T** area sentuh < 48 dp, **H** label hanya dari hint,
-**B** tombol tidak bisa diaktifkan TalkBack, **K** perkiraan kontras teks < 4,5:1.
+Temuan dikelompokkan: bug/crash/data janggal, cacat visual & estetika, aksesibilitas, performa, navigasi. Setiap
+temuan punya langkah reproduksi. Kode masalah otomatis:
+- **A** tanpa label;
+- **T** area sentuh < 48 dp (elemen yang terpotong tepi layar tidak dinilai);
+- **H** label hanya dari hint;
+- **B** tombol tidak bisa diaktifkan TalkBack;
+- **K** perkiraan kontras teks < 4,3:1 (yang tertutup bilah sistem tidak diukur);
+- **D** pembungkus kembar tanpa label;
+- **E** teks janggal (null, NaN, durasi atau tanggal mustahil);
+- **O** elemen bertumpuk;
+- **U** elemen tertutup dan tidak bisa digulir ke area yang terlihat.
 
 ## Langkah terpisah (yang dipanggil n8n)
 
@@ -166,9 +228,13 @@ lanjutkan dari langkah yang gagal dengan perintah di atas.
 
 ## Mengatur perilaku
 
-- `skenario.json` → `jelajah_menyeluruh` (true: loop lanjut sampai semua tombol/menu yang terlihat sudah diketuk,
-  atau sampai `maks_putaran` = 6), `ambang_yakin` (0.75), `rekam` (true), `beri_izin_otomatis` (true),
-  `boleh_ubah_data` (false: tombol hapus/simpan/kirim/bayar/keluar/WhatsApp/telepon diblokir pelaksana).
+- `skenario.json`:
+  - `mode`: `overtesting` atau `evaluasi`;
+  - `maks_putaran` (14) dan `batas_menit_sesi` (180; 0 = tanpa batas);
+  - `jelajah_otomatis` (true) dengan `batas_ketukan_jelajah` (400) dan `batas_menit_jelajah` (45);
+  - `boleh_ubah_data` (true = CRUD dengan pemulihan);
+  - `perintah_cadangan` / `perintah_pulihkan`;
+  - `ambang_yakin`, `rekam`, `beri_izin_otomatis`.
 - `llm.json` → model per agen, `model_cadangan` (dipakai otomatis kalau model utama gagal/kena limit),
   `reasoning_effort_*`, jumlah dan lebar gambar.
 - Tes manual satu rencana tanpa LLM: `python agen_uji.py jalankan contoh_rencana.json --rekam`.
@@ -191,6 +257,9 @@ lanjutkan dari langkah yang gagal dengan perintah di atas.
 | `izin yang gagal diberikan` di log | Xiaomi/Redmi/POCO: aktifkan USB debugging (Security settings) |
 | `gambar_ok: false` di cek-llm | model tidak membaca gambar; ganti model di llm.json |
 | Login dilewati padahal akun berbeda | hapus `.n8n-files\uji-ui\status_login.json` (dibuat ulang otomatis) |
+| `perubahan data GAGAL dipulihkan` | lihat tabel "Perubahan data dan pemulihan" di laporan; hapus manual data berpenanda UJI-... |
+| Penjelajah berhenti sebelum semua menu (`habis_anggaran`) | naikkan `batas_ketukan_jelajah` / `batas_menit_jelajah`; sisanya dikerjakan LLM |
+| `tap diblokir: ... data buatan uji` | wajar: hapus/ubah status hanya untuk data berpenanda; Perancang akan membuat data uji dulu |
 
 Catatan metode: waktu respons diukur lewat Appium (termasuk overhead ±0,1–0,5 detik), jadi bandingkan antar-run
 di HP yang sama. Metrik aksesibilitas dihitung dari struktur elemen, bukan pengujian TalkBack; temuan LLM
@@ -198,8 +267,9 @@ sebaiknya diverifikasi manual sebelum dijadikan keputusan.
 
 ## Pengujian kode (tanpa HP dan tanpa LLM)
 
-`tests/` berisi simulator HP (memakai struktur layar login Santa Maria asli dan aplikasi Wasiat tiruan dengan
-pemilih akun Google) serta server OpenAI-compatible tiruan pengganti 9router.
+`tests/` berisi simulator HP (struktur layar login Santa Maria asli, aplikasi Wasiat tiruan dengan pemilih akun
+Google, dan aplikasi demo dengan tab, lembar bawah, menu di bawah bilah navigasi, crash, tombol mati, teks janggal,
+sakelar, dan CRUD) serta server OpenAI-compatible tiruan pengganti 9router.
 
 ```
 python tests/test_agen_uji.py
@@ -208,7 +278,16 @@ python tests/test_agen_uji.py
 python tests/test_orkestrator.py
 ```
 
-Yang diuji antara lain: validasi rencana dan pemblokiran tombol berisiko, login form dan Google SSO, pemakaian
-ulang sesi login, pemberian izin lewat adb, penanganan halaman Pengaturan sistem, Autostart Xiaomi, halaman izin di dalam aplikasi, mode jelajah menyeluruh, perbaikan rencana yang ditolak validator, coba ulang saat HTTP 429, loop evaluator -> uji
-ulang -> laporan, sensor data akun di teks dan gambar, frame rekaman untuk langkah lambat, serta laporan HTML/MD.
+Yang diuji antara lain:
+- validasi rencana dan pemblokiran tombol berisiko;
+- ketukan aman (gulir dulu, tidak pernah mengetuk bilah navigasi HP);
+- pemulihan langkah gagal;
+- penjelajah otomatis: semua layar demo, wakil daftar sejenis, crash dan log error, sakelar dikembalikan, tanpa
+  mengubah data;
+- CRUD berpenanda dengan pemulihan, pemblokiran hapus data lama, ganti kata sandi, dan WhatsApp;
+- tema gelap dan jaringan dikembalikan di akhir uji;
+- login form dan Google SSO, izin lewat adb, halaman Pengaturan sistem, Autostart Xiaomi, sambungan adb;
+- sesi overtesting penuh: jelajah -> CRUD -> putaran pemulihan -> laporan;
+- coba ulang saat HTTP 429, sensor data akun di teks dan gambar, frame rekaman, serta laporan HTML/MD.
+
 Workflow n8n juga sudah dijalankan penuh di n8n 2.47.3 memakai `tests/orkestrator_sim.py`.
