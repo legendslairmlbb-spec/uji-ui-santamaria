@@ -61,6 +61,21 @@ Wasiat memakai Google SSO, jadi tidak ada email/sandi di akun.json untuk aplikas
   lalu isi `label_tombol_sso`.
 - Layar pemilih akun Google tidak dipakai sebagai bukti dan tidak dikirim ke LLM.
 
+## Izin aplikasi
+
+Aplikasi yang mewajibkan semua izin sebelum masuk menu utama ditangani dua lapis:
+
+1. **Sebelum uji** (dan setiap kali data aplikasi dihapus), semua izin yang diminta aplikasi diberikan lewat adb:
+   izin runtime (notifikasi, kamera, lokasi termasuk "sepanjang waktu", berkas, dll.), izin khusus lewat app-ops
+   (tampil di atas aplikasi lain, akses semua file, alarm tepat waktu, pasang aplikasi, akses penggunaan), dan
+   pengecualian penghemat baterai. Daftarnya tercatat di `ringkasan.json` (`izin_otomatis`).
+2. **Kalau aplikasi tetap membuka Pengaturan sistem**, pelaksana menyalakan sakelar/opsi izin yang sesuai, kembali
+   ke aplikasi, dan menandai langkah itu (`keluar_ke_pengaturan`) supaya evaluator menilainya sebagai temuan UX.
+
+HP **Xiaomi/Redmi/POCO**: aktifkan Opsi pengembang → **USB debugging (Security settings)**; tanpa ini adb tidak
+boleh memberi izin. Untuk menilai alur permintaan izin aplikasi apa adanya, set `"beri_izin_otomatis": false` di
+`skenario.json` (atau di skenario tertentu).
+
 ## Menjalankan dari terminal
 
 Terminal 1 (biarkan terbuka; tutup sesi Appium Inspector kalau sedang terbuka):
@@ -137,7 +152,7 @@ lanjutkan dari langkah yang gagal dengan perintah di atas.
 
 ## Mengatur perilaku
 
-- `skenario.json` → `ambang_yakin` (bawaan 0.75), `maks_putaran` (3), `rekam` (true),
+- `skenario.json` → `ambang_yakin` (bawaan 0.75), `maks_putaran` (3), `rekam` (true), `beri_izin_otomatis` (true),
   `boleh_ubah_data` (false: tombol hapus/simpan/kirim/bayar/keluar/WhatsApp/telepon diblokir pelaksana).
 - `llm.json` → model per agen, `model_cadangan` (dipakai otomatis kalau model utama gagal/kena limit),
   `reasoning_effort_*`, jumlah dan lebar gambar.
@@ -155,6 +170,7 @@ lanjutkan dari langkah yang gagal dengan perintah di atas.
 | `file akun tidak ditemukan` | salin `akun.contoh.json` menjadi `akun.json` |
 | `Google meminta kata sandi` (Wasiat) | masukkan dulu akun Google uji di HP lewat Setelan > Akun |
 | `tombol masuk dengan Google tidak ditemukan` | isi `label_tombol_sso` di akun.json sesuai label tombolnya |
+| `izin yang gagal diberikan` di log | Xiaomi/Redmi/POCO: aktifkan USB debugging (Security settings) |
 | `gambar_ok: false` di cek-llm | model tidak membaca gambar; ganti model di llm.json |
 | Login dilewati padahal akun berbeda | hapus `.n8n-files\uji-ui\status_login.json` (dibuat ulang otomatis) |
 
@@ -175,6 +191,6 @@ python tests/test_orkestrator.py
 ```
 
 Yang diuji antara lain: validasi rencana dan pemblokiran tombol berisiko, login form dan Google SSO, pemakaian
-ulang sesi login, perbaikan rencana yang ditolak validator, coba ulang saat HTTP 429, loop evaluator -> uji
+ulang sesi login, pemberian izin lewat adb dan penanganan halaman Pengaturan sistem, perbaikan rencana yang ditolak validator, coba ulang saat HTTP 429, loop evaluator -> uji
 ulang -> laporan, sensor data akun di teks dan gambar, frame rekaman untuk langkah lambat, serta laporan HTML/MD.
 Workflow n8n juga sudah dijalankan penuh di n8n 2.47.3 memakai `tests/orkestrator_sim.py`.

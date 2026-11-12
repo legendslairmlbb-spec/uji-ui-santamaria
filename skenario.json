@@ -1,10 +1,11 @@
 {
-  "_catatan": "Daftar sesi uji untuk perintah 'semua' dan workflow n8n (nomor skenario dimulai dari 0). Ubah 'tujuan' sesuka hati; 'peran' harus ada di akun.json. Pengaturan di sini berlaku untuk semua skenario, kecuali ditimpa di skenario itu sendiri.",
+  "_catatan": "Daftar sesi uji untuk perintah 'semua' dan workflow n8n (nomor skenario dimulai dari 0). Ubah 'tujuan' sesuka hati; 'peran' harus ada di akun.json. Pengaturan di sini berlaku untuk semua skenario, kecuali ditimpa di skenario itu sendiri. beri_izin_otomatis=true: semua izin yang diminta aplikasi diberikan lewat adb sebelum uji (false: alur permintaan izin ikut dinilai).",
   "pengaturan": {
     "ambang_yakin": 0.75,
     "maks_putaran": 3,
     "rekam": true,
-    "boleh_ubah_data": false
+    "boleh_ubah_data": false,
+    "beri_izin_otomatis": true
   },
   "skenario": [
     {

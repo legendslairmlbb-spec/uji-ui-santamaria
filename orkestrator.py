@@ -73,7 +73,8 @@ LLM_BAWAAN = {
     "maks_gambar_perancang": 4,
     "maks_gambar_evaluator": 14,
 }
-PENGATURAN_BAWAAN = {"ambang_yakin": 0.75, "maks_putaran": 3, "rekam": True, "boleh_ubah_data": False}
+PENGATURAN_BAWAAN = {"ambang_yakin": 0.75, "maks_putaran": 3, "rekam": True, "boleh_ubah_data": False,
+                     "beri_izin_otomatis": True}
 TUJUAN_BAWAAN = (
     "Evaluasi UI/UX alur utama peran ini: (1) aksesibilitas - label elemen untuk pembaca layar, ukuran area "
     "sentuh, kontras, dukungan teks besar; (2) waktu respons - startup, login, perpindahan layar, ada tidaknya "
@@ -638,7 +639,8 @@ def tabel_langkah(run, ref_layar):
         item = {"ref": ref, "langkah": lk["langkah"], "aksi": lk.get("aksi"), "berhasil": lk.get("berhasil"),
                 "respon_ms": lk.get("respon_ms"), "stabil_ms": lk.get("sampai_stabil_ms"),
                 "durasi_ms": lk.get("durasi_aksi_ms"), "layar": ref_layar.get(ref), "galat": lk.get("galat"),
-                "catatan": lk.get("catatan"), "startup": lk.get("startup") or None}
+                "catatan": lk.get("catatan"), "startup": lk.get("startup") or None,
+                "keluar_ke_pengaturan": lk.get("keluar_ke_pengaturan")}
         baris.append({k: v for k, v in item.items() if v not in (None, "", [], {})})
     return baris
 
@@ -683,6 +685,15 @@ def _tutup_untuk_frame(run, no, sensor):
                 lebar = im.width  # lebar layar HP dalam piksel = ruang koordinat bounds
         return {"tutup": tutup, "lebar_asal": lebar}
     return {}
+
+
+def ringkas_izin(ringkasan):
+    """Teks singkat izin yang diberikan otomatis lewat adb pada satu run."""
+    if not ringkasan.get("beri_izin_otomatis", True):
+        return "izin TIDAK diberikan otomatis (alur permintaan izin aplikasi teramati apa adanya)"
+    nama = sorted({n for x in ringkasan.get("izin_otomatis") or [] for k in ("runtime", "appops", "lain") for n in x.get(k, [])})
+    return ("izin diberikan otomatis lewat adb sebelum uji: " + (", ".join(nama) if nama else "tidak ada yang perlu")
+            + " (dialog izin aplikasi tidak teramati)")
 
 
 def info_aplikasi(sesi, cfg, peta):
@@ -731,7 +742,9 @@ def agen_perancang(sesi, k, ctx):
             f"TUJUAN UJI: {sesi.data['tujuan']}",
             f"PUTARAN: {k} dari maksimal {atur['maks_putaran']}",
             "BATASAN: " + ("tombol yang mengubah data DIIZINKAN untuk sesi ini." if atur["boleh_ubah_data"]
-                           else "tombol yang mengubah data/keluar dari aplikasi diblokir pelaksana."),
+                           else "tombol yang mengubah data/keluar dari aplikasi diblokir pelaksana.")
+            + (" Izin aplikasi sudah diberikan otomatis." if atur["beri_izin_otomatis"] else "")
+            + " Kalau aplikasi membuka Pengaturan sistem, pelaksana menyalakan izinnya lalu kembali ke aplikasi.",
             "", "PETA LAYAR (JSON):",
             json.dumps([ringkas_layar(s, "perancang") for s in peta["layar"]], ensure_ascii=False)]
     if sebelumnya:
@@ -848,7 +861,8 @@ def agen_evaluator(sesi, k, ctx):
     for run in peta["runs"]:
         rencana = run["ringkasan"]
         teks += ["", f"LANGKAH UJI {run['id']} - judul '{rencana.get('judul')}', tujuan: {rencana.get('tujuan') or '-'}; "
-                 f"berhasil={rencana.get('berhasil')}, rekaman={'ada' if rencana.get('rekaman') else 'tidak ada'}:",
+                 f"berhasil={rencana.get('berhasil')}, rekaman={'ada' if rencana.get('rekaman') else 'tidak ada'}; "
+                 f"{ringkas_izin(rencana)}:",
                  json.dumps(tabel_langkah(run, peta["ref_layar"]), ensure_ascii=False)]
     teks += ["", "HASIL TERUKUR OTOMATIS (startup, langkah >= 1 detik, langkah gagal, statistik pengukuran berulang):",
              json.dumps(ukur, ensure_ascii=False),
@@ -971,7 +985,7 @@ def cmd_mulai(args, ctx):
                 {"aksi": "gulir", "nama": "gulir_bawah", "arah": "bawah", "lanjut_jika_gagal": True},
                 {"aksi": "tangkap", "nama": "layar_awal_bawah"},
                 {"aksi": "gulir", "nama": "gulir_atas", "arah": "atas", "lanjut_jika_gagal": True}]
-    rencana = {"aplikasi": app, "peran": peran, "judul": "observasi_awal",
+    rencana = {"aplikasi": app, "peran": peran, "judul": "observasi_awal", "beri_izin_otomatis": atur["beri_izin_otomatis"],
                "tujuan": "observasi awal untuk LLM Perancang (startup, login, layar pertama)", "langkah": langkah}
     try:
         hasil = eks.jalankan_rencana(rencana, ctx["cfg"], rekam=atur["rekam"], folder=sesi.folder / "observasi",
@@ -1038,6 +1052,7 @@ def cmd_jalankan(args, ctx):
     log(f"--- Putaran {p['ke']}: pelaksana menjalankan rencana di HP")
     rencana = baca_json(sesi.folder / p["rencana"])
     atur = sesi.atur
+    rencana["beri_izin_otomatis"] = atur["beri_izin_otomatis"]
     hasil = eks.jalankan_rencana(rencana, ctx["cfg"], rekam=atur["rekam"], folder=sesi.folder / p["folder_uji"],
                                  izinkan_berisiko=atur["boleh_ubah_data"])
     if hasil["status"] == "rencana_tidak_valid":
@@ -1130,6 +1145,11 @@ def data_laporan(sesi, ctx):
            "model": {"perancang": ctx["llm"]["model_perancang"], "evaluator": ev.get("model")},
            "metode": [eks.CATATAN_METODE, CATATAN_FRAME,
                       "Kontras dihitung otomatis dari piksel screenshot (perkiraan) dan perlu dikonfirmasi visual.",
+                      ("Izin aplikasi diberikan otomatis lewat adb sebelum uji supaya fitur lanjutan bisa diuji; alur "
+                       "permintaan izin aplikasi tidak dinilai. Kalau aplikasi tetap membuka Pengaturan sistem, skrip "
+                       "menyalakan izinnya dan langkah itu ditandai." if sesi.atur["beri_izin_otomatis"] else
+                       "Izin aplikasi tidak diberikan otomatis, jadi alur permintaan izin aplikasi ikut dinilai; "
+                       "halaman Pengaturan sistem yang dibuka aplikasi ditangani skrip dan ditandai."),
                       "Temuan ditulis oleh LLM Evaluator berdasarkan data di atas; verifikasi temuan penting secara "
                       "manual (misalnya dengan TalkBack dan Accessibility Scanner) sebelum dijadikan keputusan.",
                       "Data akun tidak dikirim ke LLM: teks disensor dan kolom input berisi data akun ditutup "

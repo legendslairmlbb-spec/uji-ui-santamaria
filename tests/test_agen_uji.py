@@ -79,7 +79,9 @@ nama_langkah = [l["langkah"] for l in r["langkah"]]
 cek(nama_langkah == ["buka_aplikasi", "login_owner_isi_identitas", "login_owner_isi_sandi",
                      "login_owner_tekan_masuk", "gulir_beranda", "beranda_bawah"], f"urutan langkah: {nama_langkah}")
 cek(("adb", "shell pm clear id.co.santamaria.app") in SIM.panggilan, "harus pm clear karena masih login akun lain")
-cek(("klik", "Izinkan") in SIM.panggilan, "dialog izin notifikasi harus ditekan Izinkan")
+cek(("adb", "shell pm grant id.co.santamaria.app android.permission.POST_NOTIFICATIONS") in SIM.panggilan
+    and ("klik", "Izinkan") not in SIM.panggilan, "izin notifikasi harus diberikan lewat adb, tanpa dialog")
+cek(any("SYSTEM_ALERT_WINDOW" in x.get("appops", []) for x in r["izin_otomatis"]), f"app-ops: {r['izin_otomatis']}")
 cek(SIM.login_sebagai == "dummy.owner@contoh.test", "harus login sebagai owner")
 cek(r["langkah"][0]["startup"] == {"total_time_ms": 812, "launch_state": "COLD"}, "startup harus terbaca")
 masuk = r["langkah"][3]
@@ -203,5 +205,51 @@ for email, harap in (("lain@gmail.com", "selesai"), ("tidakada@gmail.com", "gaga
 cek("tidak ada di pemilih akun" in h["langkah_gagal"]["galat"] and "tidakada" not in h["langkah_gagal"]["galat"],
     f"pesan akun salah: {h['langkah_gagal']}")
 print("12. pilih akun Google tertentu + akun salah: OK ->", h["langkah_gagal"]["galat"][:60])
+
+# ---------------------------------------------------------------- 13. izin khusus sudah diberikan -> tidak ke Pengaturan
+rencana = {"aplikasi": "santamaria", "judul": "mengambang", "langkah": [
+    {"aksi": "buka_aplikasi", "nama": "buka"}, {"aksi": "login", "nama": "login", "peran": "consumer"},
+    {"aksi": "tap", "nama": "aktifkan_mengambang", "target": {"label": "Aktifkan tampilan mengambang"},
+     "tunggu_muncul": {"label": "Mode mengambang aktif"}}]}
+n0 = len(SIM.panggilan)
+kode, baris, err = jalankan_cli("jalankan", "-", stdin=json.dumps(rencana))
+h = json_terakhir(baris)
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+cek(h["status"] == "selesai" and ("buka_pengaturan", "overlay") not in SIM.panggilan[n0:], f"tanpa Pengaturan: {h}\n{err[-1500:]}")
+iz = r["izin_otomatis"][0]
+cek(iz["saat"] == "awal uji" and "tanpa_optimasi_baterai" in iz["lain"], f"ringkasan izin: {iz}")
+print("13. izin lewat adb (runtime + app-ops + baterai): OK ->", iz)
+
+# ---------------------------------------------------------------- 14. beri_izin_otomatis=false: dialog + Pengaturan ditangani
+rencana = {"aplikasi": "santamaria", "judul": "izin_manual", "beri_izin_otomatis": False, "langkah": [
+    {"aksi": "reset_aplikasi", "nama": "reset"}, {"aksi": "buka_aplikasi", "nama": "buka"},
+    {"aksi": "login", "nama": "login", "peran": "consumer"},
+    {"aksi": "tap", "nama": "aktifkan_mengambang", "target": {"label": "Aktifkan tampilan mengambang"}},
+    {"aksi": "tap", "nama": "buka_laporan", "target": {"label": "Laporan"}, "tunggu_muncul": {"label": "Laporan Keuangan"}}]}
+n0 = len(SIM.panggilan)
+kode, baris, err = jalankan_cli("jalankan", "-", stdin=json.dumps(rencana))
+h = json_terakhir(baris)
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+nama_langkah = [l["langkah"] for l in r["langkah"]]
+cek(h["status"] == "selesai", f"izin manual: {h}\n{nama_langkah}\n{err[-2500:]}")
+cek(("klik", "Izinkan") in SIM.panggilan[n0:], "dialog izin notifikasi harus ditekan Izinkan")
+cek(not any(p[0] == "adb" and "pm grant" in p[1] for p in SIM.panggilan[n0:]) and r["izin_otomatis"] == [],
+    "tidak boleh ada pm grant saat beri_izin_otomatis=false")
+cek(nama_langkah[-3:] == ["layar_sistem_5", "izinkan_di_pengaturan_5", "buka_laporan"], f"urutan: {nama_langkah}")
+izin = r["langkah"][-2]
+cek(izin["keluar_ke_pengaturan"] == "com.android.settings" and izin["aksi"] == "izin_pengaturan" and izin["berhasil"]
+    and "Izinkan tampilan di atas aplikasi lain" in izin["catatan"], f"langkah izin: {izin}")
+cek(SIM.overlay_ui and ("sakelar_overlay", True) in SIM.panggilan[n0:], "sakelar yang benar harus dinyalakan")
+print("14. alur izin manual + Pengaturan: OK ->", izin["catatan"][:80])
+
+# ---------------------------------------------------------------- 15. menunggu kondisi lalu dibawa ke Pengaturan -> berhenti cepat
+rencana["langkah"][3]["tunggu_muncul"] = {"label": "Mode mengambang aktif"}
+kode, baris, err = jalankan_cli("jalankan", "-", stdin=json.dumps(rencana))
+h = json_terakhir(baris)
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+tap = next(l for l in r["langkah"] if l["langkah"] == "aktifkan_mengambang")
+cek(h["status"] == "selesai" and tap.get("keluar_ke_pengaturan") and tap["respon_ms"] < 4000
+    and "kondisi tujuan belum diperiksa" in tap["catatan"], f"berhenti cepat: {tap}\n{err[-1500:]}")
+print("15. kondisi + Pengaturan berhenti cepat: OK ->", tap["respon_ms"], "ms")
 
 print(f"\nSEMUA {lulus} CEK LULUS (hasil uji di {TMP})")

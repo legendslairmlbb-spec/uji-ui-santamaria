@@ -54,6 +54,23 @@ LABEL_LANJUT_SSO = ("Lanjutkan", "Continue", "Lanjut", "Setuju", "I agree", "Agr
 LABEL_IZIN = ("Izinkan", "Allow", "Saat aplikasi digunakan", "While using the app",
               "Hanya kali ini", "Only this time")
 POLA_DIALOG_IZIN = 'packageNameMatches(".*(permissioncontroller|packageinstaller).*")'
+# Aplikasi sistem tempat izin khusus diatur (Pengaturan, pengelola izin vendor, penghemat baterai, dll.).
+POLA_PENGATURAN = re.compile(r"settings|securitycenter|permissioncontroller|permissionmanager|safecenter|"
+                             r"packageinstaller|devicecare|powerkeeper|\.lool", re.I)
+POLA_IZINKAN = re.compile(r"izinkan|allow|aktifkan|enable|permit|notifikasi|notification|sepanjang waktu|all the time|"
+                          r"di atas aplikasi lain|over other apps|semua file|all files|akses|access|tanpa batasan|"
+                          r"no restrictions|unrestricted", re.I)
+POLA_TOLAK = re.compile(r"\b(jangan|tolak|deny|don't|do not|nonaktifkan|disable|batasi|restricted|hapus|delete)\b", re.I)
+# Izin khusus yang tidak bisa diberikan dengan 'pm grant'; diberikan lewat app-ops.
+IZIN_APPOPS = {
+    "android.permission.SYSTEM_ALERT_WINDOW": "SYSTEM_ALERT_WINDOW",
+    "android.permission.MANAGE_EXTERNAL_STORAGE": "MANAGE_EXTERNAL_STORAGE",
+    "android.permission.SCHEDULE_EXACT_ALARM": "SCHEDULE_EXACT_ALARM",
+    "android.permission.REQUEST_INSTALL_PACKAGES": "REQUEST_INSTALL_PACKAGES",
+    "android.permission.PACKAGE_USAGE_STATS": "GET_USAGE_STATS",
+    "android.permission.WRITE_SETTINGS": "WRITE_SETTINGS",
+    "android.permission.USE_FULL_SCREEN_INTENT": "USE_FULL_SCREEN_INTENT",
+}
 KATA_KOLOM_KODE = re.compile(r"\bkode\b|organisasi|instansi", re.I)
 XPATH_KOLOM_SANDI = '//android.widget.EditText[@password="true"]'
 FILE_STATUS_LOGIN = FOLDER_DASAR / "status_login.json"
@@ -114,6 +131,40 @@ def info_perangkat(package):
         "dpi": int(dpi[-1]) if dpi else None,
         "versi_aplikasi": versi.group(1) if versi else None,
     }
+
+
+def beri_izin_adb(package):
+    """Berikan semua izin runtime yang diminta aplikasi + izin khusus (app-ops, baterai) lewat adb, tanpa UI.
+    Supaya uji tidak tersangkut di dialog/Pengaturan izin. Dipanggil di awal uji dan setelah 'pm clear'."""
+    out = adb("shell", "dumpsys", "package", package)
+    disebut = set(re.findall(r"([\w.]+\.permission\.[A-Z0-9_]+)", out))
+    belum = list(dict.fromkeys(re.findall(r"([\w.]+\.permission\.[A-Z0-9_]+): granted=false", out)))
+    belum.sort(key=lambda x: "BACKGROUND" in x)  # lokasi latar belakang hanya bisa setelah lokasi biasa
+    hasil = {"runtime": [], "appops": [], "lain": [], "gagal": []}
+
+    def gagal(teks):
+        return any(k in teks for k in ("Exception", "Error", "not a changeable", "Unknown permission", "not requested"))
+
+    for izin in belum:
+        teks = adb("shell", "pm", "grant", package, izin)
+        (hasil["gagal"] if gagal(teks) else hasil["runtime"]).append(izin.split(".")[-1])
+    for izin, op in IZIN_APPOPS.items():
+        if izin in disebut:
+            teks = adb("shell", "appops", "set", package, op, "allow")
+            (hasil["gagal"] if gagal(teks) else hasil["appops"]).append(op)
+    if "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" in disebut:
+        adb("shell", "dumpsys", "deviceidle", "whitelist", f"+{package}")
+        hasil["lain"].append("tanpa_optimasi_baterai")
+    if "android.permission.ACCESS_NOTIFICATION_POLICY" in disebut:
+        adb("shell", "cmd", "notification", "allow_dnd", package)
+        hasil["lain"].append("akses_jangan_ganggu")
+    diberi = hasil["runtime"] + hasil["appops"] + hasil["lain"]
+    if diberi:
+        log("  izin diberikan lewat adb:", ", ".join(diberi))
+    if hasil["gagal"]:
+        log("  izin yang gagal diberikan:", ", ".join(hasil["gagal"]),
+            "(HP Xiaomi/Redmi/POCO: aktifkan 'USB debugging (Security settings)' di Opsi pengembang)")
+    return hasil
 
 
 def baca_status_login():
@@ -434,6 +485,8 @@ class Pelaksana:
         self.rencana_ke = None
         self.skala_font_awal = None
         self.sso = self.app.get("login_metode") == "google_sso"
+        self.beri_izin = self.app.get("beri_izin_otomatis", True)
+        self.izin_otomatis = []  # catatan pemberian izin lewat adb selama uji
 
     # ---------- utilitas
     def cari(self, target):
@@ -526,6 +579,97 @@ class Pelaksana:
             tombol.click()
             time.sleep(0.8)
 
+    def izin_ulang(self, alasan):
+        if self.beri_izin:
+            self.izin_otomatis.append({"saat": alasan, **beri_izin_adb(self.pkg)})
+
+    def di_luar_app(self):
+        """True kalau yang tampil adalah layar sistem (Pengaturan/dialog izin), bukan aplikasi yang diuji."""
+        paket = self.paket_aktif()
+        return bool(paket) and paket != self.pkg and POLA_PENGATURAN.search(paket) is not None
+
+    def tangani_pengaturan(self):
+        """Di halaman Pengaturan yang dibuka aplikasi: nyalakan sakelar/opsi izin. Kembalikan labelnya atau None."""
+        root = _root(self.d.page_source)
+        induk = {anak: p for p in root.iter() for anak in p}
+
+        def teks(el):
+            return (el.get("text") or el.get("content-desc") or "").strip()
+
+        def teks_baris(el):  # leluhur terkecil yang punya teks dan hanya satu elemen centang
+            node = el
+            for _ in range(4):
+                isi = [t for t in (teks(x) for x in node.iter()) if t]
+                n_cek = sum(1 for x in node.iter() if x.get("checkable") == "true")
+                if isi and n_cek <= 1:
+                    return " ".join(isi)[:200]
+                if n_cek > 1 and node is not el:
+                    break
+                node = induk.get(node)
+                if node is None:
+                    break
+            return teks(el)
+
+        kandidat = [el for el in root.iter() if el.get("checkable") == "true" and el.get("checked") == "false"
+                    and el.get("enabled") != "false" and _bounds(el.get("bounds"))]
+        radio = [el for el in kandidat if "Radio" in (el.get("class") or "")]
+        pilih = None
+        for pola in (r"sepanjang waktu|all the time", r"tanpa batasan|no restrictions|unrestricted", r"izinkan|allow"):
+            pilih = next((el for el in radio if re.search(pola, teks_baris(el), re.I)
+                          and not POLA_TOLAK.search(teks_baris(el))), None)
+            if pilih is not None:
+                break
+        if pilih is None:
+            sakelar = [el for el in kandidat if el not in radio]
+            cocok = [el for el in sakelar if POLA_IZINKAN.search(teks_baris(el)) and not POLA_TOLAK.search(teks_baris(el))]
+            pilih = cocok[0] if cocok else (sakelar[0] if len(sakelar) == 1 else None)
+        if pilih is None:
+            return None
+        label = teks_baris(pilih)[:120] or (pilih.get("class") or "sakelar")
+        b = _bounds(pilih.get("bounds"))
+        log(f"  menyalakan izin di Pengaturan: {label}")
+        self.d.tap([((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)])
+        time.sleep(1.0)
+        for lb in LABEL_IZIN + ("OK", "Ya", "Yes"):  # dialog konfirmasi setelah sakelar dinyalakan
+            try:
+                el = self.d.find_elements(UIA, f'new UiSelector().text("{_esc(lb)}").clickable(true)')
+            except Exception:
+                el = []
+            if el and (el[0].get_attribute("package") or "") != self.pkg:
+                el[0].click()
+                time.sleep(0.8)
+                break
+        return label
+
+    def pulihkan_ke_app(self, i):
+        """Aplikasi membuka layar sistem (Pengaturan/dialog izin): catat, izinkan, lalu kembali ke aplikasi."""
+        paket = self.paket_aktif()
+        self.aksi_sekarang, self.rencana_ke = "izin_pengaturan", i
+        log(f"  aplikasi membuka layar sistem ({paket}); izin akan dinyalakan lalu kembali ke aplikasi")
+        self.catat_langkah(f"layar_sistem_{i}", stabil=False, tambahan={"keluar_ke_pengaturan": paket},
+                           catatan=f"aplikasi membawa pengguna ke layar sistem di luar aplikasi ({paket})")
+        hasil = {}
+
+        def izinkan_lalu_kembali():
+            self.tutup_dialog_izin()
+            hasil["label"] = self.tangani_pengaturan() if self.di_luar_app() else "dialog izin sistem"
+            for _ in range(4):
+                if self.paket_aktif() == self.pkg:
+                    break
+                self.d.back()
+                time.sleep(0.8)
+            if self.paket_aktif() != self.pkg:
+                adb("shell", "am", "start", "-n", f'{self.pkg}/{self.app["activity"]}')
+
+        ok = self.catat_langkah(f"izinkan_di_pengaturan_{i}", aksi=izinkan_lalu_kembali,
+                                sampai=lambda: self.paket_aktif() == self.pkg, batas=15,
+                                tambahan={"keluar_ke_pengaturan": paket})
+        label = hasil.get("label")
+        self.langkah[-1]["catatan"] = (f"izin dinyalakan otomatis: '{label}', lalu kembali ke aplikasi" if label else
+                                       "tidak menemukan sakelar izin yang aman untuk dinyalakan; fitur terkait mungkin "
+                                       "tetap terkunci") + " (dilakukan skrip, bukan bagian alur aplikasi)"
+        return ok
+
     # ---------- pencatatan langkah
     def ambil(self, dasar):
         hasil = {"screenshot": None, "xml": None, "metrik": None}
@@ -552,15 +696,32 @@ class Pelaksana:
         t0 = time.perf_counter()
         t_mulai = round((t0 - self.t_acuan) * 1000)
         berhasil, galat, respon, stabil_dt = True, None, None, None
+        keluar = {}
+        cek_luar = [t0 + 1.0]
+
+        def kondisi():
+            if sampai():
+                return True
+            if self.aksi_sekarang != "izin_pengaturan" and time.perf_counter() >= cek_luar[0]:
+                cek_luar[0] = time.perf_counter() + 1.0
+                if self.di_luar_app():
+                    keluar["paket"] = self.paket_aktif()
+                    return True
+            return False
+
         try:
             if aksi:
                 aksi()
             if sampai:
-                berhasil = self.tunggu(sampai, batas)
+                berhasil = self.tunggu(kondisi, batas)
                 if not berhasil:
                     galat = f"kondisi tujuan tidak terpenuhi dalam {batas:g} detik"
             respon = time.perf_counter() - t0
-            if stabil and berhasil:
+            if keluar:
+                catatan = (catatan + " | " if catatan else "") + (
+                    f"aplikasi membuka layar sistem ({keluar['paket']}); kondisi tujuan belum diperiksa")
+                tambahan = {**(tambahan or {}), "keluar_ke_pengaturan": keluar["paket"]}
+            elif stabil and berhasil:
                 self.tunggu_stabil()
                 stabil_dt = time.perf_counter() - t0
         except Exception as e:  # noqa: BLE001 - kegagalan apa pun dicatat sebagai hasil uji
@@ -597,6 +758,8 @@ class Pelaksana:
     # ---------- eksekusi rencana
     def jalankan(self, rencana):
         for i, s in enumerate(rencana["langkah"], 1):
+            if s["aksi"] not in ("buka_aplikasi", "reset_aplikasi") and self.di_luar_app():
+                self.pulihkan_ke_app(i)
             if not self.satu_langkah(i, s) and not s.get("lanjut_jika_gagal"):
                 return False
         return all(l["berhasil"] for l in self.langkah)
@@ -624,6 +787,7 @@ class Pelaksana:
             def reset():
                 adb("shell", "pm", "clear", self.pkg)
                 tulis_status_login(self.pkg, None)
+                self.izin_ulang("setelah reset_aplikasi")
             return self.catat_langkah(nama, aksi=reset, stabil=False, catatan="data aplikasi dihapus (pm clear)")
         if aksi == "kembali":
             return self.catat_langkah(nama, aksi=self.d.back, sampai=sampai, batas=batas, catatan=catatan)
@@ -721,7 +885,8 @@ class Pelaksana:
             startup["launch_state"] = m.group(1) if m else None
 
         def siap():
-            return self.jumlah(f'packageName("{self.pkg}").clickable(true)') > 0 or self.ada_dialog_izin()
+            return (self.jumlah(f'packageName("{self.pkg}").clickable(true)') > 0 or self.ada_dialog_izin()
+                    or self.di_luar_app())
 
         ok = self.catat_langkah(
             nama, aksi=buka, sampai=sampai or siap, batas=max(batas, 30), tambahan={"startup": startup},
@@ -861,6 +1026,7 @@ class Pelaksana:
             log("  form login tidak ada (kemungkinan masih login akun lain); menghapus data aplikasi lalu membuka ulang")
             adb("shell", "pm", "clear", self.pkg)
             tulis_status_login(self.pkg, None)
+            self.izin_ulang("setelah data aplikasi dihapus untuk login")
             adb("shell", "am", "start", "-W", "-n", f'{self.pkg}/{self.app["activity"]}')
             self.tunggu(lambda: self.layar_login_ada() or self.ada_dialog_izin(), 30)
             self.tutup_dialog_izin()
@@ -998,6 +1164,8 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
     driver = sambung_appium()
     p = Pelaksana(driver, cfg, kode_app, folder, info, izinkan_berisiko)
     p.peran_aktif = rencana.get("peran")
+    p.beri_izin = rencana.get("beri_izin_otomatis", p.beri_izin)
+    p.izin_ulang("awal uji")
     mulai = datetime.now().isoformat(timespec="seconds")
     t0 = time.perf_counter()
     berhasil, video = False, None
@@ -1023,6 +1191,8 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
             "durasi_total_ms": round((time.perf_counter() - t0) * 1000),
             "rekaman": video,
             "izinkan_aksi_berisiko": izinkan_berisiko,
+            "beri_izin_otomatis": p.beri_izin,
+            "izin_otomatis": p.izin_otomatis,
             "catatan_metode": CATATAN_METODE,
             "langkah": p.langkah,
             "layar_akhir": daftar_elemen(p.xml_terakhir, p.density) if p.xml_terakhir else [],
@@ -1104,6 +1274,8 @@ OPSI PER LANGKAH
   "batas_detik": 15            batas waktu tunggu
   "lanjut_jika_gagal": true    rencana tetap lanjut walau langkah ini gagal
   "paksa_login_ulang": true    (khusus login) login ulang walau sesi peran yang sama masih aktif
+Tingkat rencana: "beri_izin_otomatis": false  izin TIDAK diberikan lewat adb di awal (untuk menilai alur izin);
+  kalau aplikasi membuka Pengaturan sistem, pelaksana tetap menyalakan izinnya lalu kembali ke aplikasi.
   "catatan": "..."             alasan langkah ini, untuk evaluator
 
 ATURAN

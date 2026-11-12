@@ -104,6 +104,10 @@ cek(evaluator and 3 <= gambar(evaluator[-1]) <= 14, f"evaluator: jumlah gambar {
 cek(perancang[0]["reasoning_effort"] == "low" and evaluator[-1]["reasoning_effort"] == "medium", "reasoning_effort")
 teks_eval = json.dumps(evaluator[-1]["messages"][1]["content"][0]["text"], ensure_ascii=False)
 cek("EVALUASI SEBELUMNYA" in teks_eval and "P2." in teks_eval and "statistik_berulang" in teks_eval, "isi prompt evaluator")
+cek("izin diberikan otomatis lewat adb sebelum uji: " in teks_eval and "SYSTEM_ALERT_WINDOW" in teks_eval,
+    "evaluator harus tahu izin diberikan otomatis")
+obs = json.loads((sesi / "observasi" / "ringkasan.json").read_text(encoding="utf-8"))
+cek(obs["beri_izin_otomatis"] is True and obs["izin_otomatis"][0]["saat"] == "awal uji", f"izin observasi: {obs['izin_otomatis']}")
 teks_p2 = perancang[-1]["messages"][1]["content"][0]["text"]
 cek("PERMINTAAN EVALUATOR" in teks_p2 and "Laporan Keuangan" in teks_p2, "perancang putaran 2 harus melihat permintaan & peta layar")
 print("   prompt: perancang", [gambar(b) for b in perancang], "gambar; evaluator", [gambar(b) for b in evaluator], "gambar")

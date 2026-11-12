@@ -18,6 +18,10 @@ from pathlib import Path
 PKG = "id.co.santamaria.app"
 PKG_WASIAT = "id.co.santamaria.wasiat"
 PKG_GMS = "com.google.android.gms"
+PKG_SETELAN = "com.android.settings"
+IZIN_NOTIF = "android.permission.POST_NOTIFICATIONS"
+IZIN_DIMINTA = [IZIN_NOTIF, "android.permission.CAMERA", "android.permission.ACCESS_FINE_LOCATION",
+                "android.permission.ACCESS_BACKGROUND_LOCATION"]
 FIXTURE = Path(__file__).resolve().parent / "fixtures"
 LOGIN_XML = (FIXTURE / "login_santamaria.xml").read_text(encoding="utf-8")
 AKUN = json.loads(Path(os.environ.get("UJI_UI_AKUN") or FIXTURE / "akun_uji.json").read_text(encoding="utf-8"))
@@ -49,6 +53,8 @@ def beranda(tergulir):
         node("android.widget.Button", content_desc="Pesanan&#10;3", clickable="true", bounds="[620,400][1180,560]"),
         node("android.widget.ImageButton", clickable="true", bounds="[1100,140][1180,220]"),  # ikon tanpa label, 29 dp
         node("android.widget.Button", content_desc="Keluar", clickable="true", bounds="[40,2420][1180,2560]"),
+        node("android.widget.Button", content_desc="Aktifkan tampilan mengambang", clickable="true",
+             bounds="[40,2260][1180,2400]"),
         node("android.view.View", scrollable="true", bounds="[0,600][1220,2400]", anak=items),
     )
 
@@ -70,6 +76,9 @@ LAYAR = {
              clickable="true", bounds="[80,1560][1140,1700]"),
         pkg="com.google.android.permissioncontroller"),
     "launcher": layar(node("android.view.View", pkg="com.miui.home", content_desc="Layar utama HP"), pkg="com.miui.home"),
+    "mengambang": layar(
+        node("android.view.View", content_desc="Mode mengambang aktif", heading="true", bounds="[0,120][1220,300]"),
+        node("android.widget.Button", content_desc="Selesai", clickable="true", bounds="[40,400][1180,560]")),
     # ---- aplikasi Wasiat (login Google SSO)
     "w_login": layar(
         node("android.view.View", pkg=PKG_WASIAT, content_desc="Wasiat", heading="true", bounds="[0,300][1220,500]"),
@@ -96,6 +105,24 @@ LAYAR = {
 }
 
 
+def layar_pengaturan(aktif):
+    """Halaman Pengaturan sistem 'Tampilkan di atas aplikasi lain' untuk Santa Maria."""
+    baris = node("android.widget.LinearLayout", pkg=PKG_SETELAN, clickable="true", bounds="[0,700][1220,900]", anak=(
+        node("android.widget.TextView", pkg=PKG_SETELAN, text="Izinkan tampilan di atas aplikasi lain",
+             bounds="[60,740][980,860]")
+        + node("android.widget.LinearLayout", pkg=PKG_SETELAN, bounds="[1000,740][1180,860]", anak=node(
+            "android.widget.Switch", pkg=PKG_SETELAN, checkable="true", checked="true" if aktif else "false",
+            clickable="true", bounds="[1020,760][1160,840]"))))
+    lain = node("android.widget.LinearLayout", pkg=PKG_SETELAN, bounds="[0,920][1220,1100]", anak=(
+        node("android.widget.TextView", pkg=PKG_SETELAN, text="Sembunyikan ikon notifikasi", bounds="[60,960][980,1060]")
+        + node("android.widget.Switch", pkg=PKG_SETELAN, checkable="true", checked="true", clickable="true",
+               bounds="[1020,980][1160,1060]")))
+    return layar(node("android.widget.TextView", pkg=PKG_SETELAN, text="Tampilkan di atas aplikasi lain",
+                      bounds="[60,300][1160,420]"),
+                 node("android.widget.TextView", pkg=PKG_SETELAN, text="Santa Maria", bounds="[60,480][1160,560]"),
+                 baris, lain, pkg=PKG_SETELAN)
+
+
 class Sim:
     def __init__(self):
         self.login_sebagai = "dummy.admin@contoh.test"  # HP masih login akun lain
@@ -110,6 +137,9 @@ class Sim:
         self.mulai_rekam = None
         self.app = "santamaria"
         self.wasiat_login = None
+        self.izin_runtime = set()
+        self.appops = set()
+        self.overlay_ui = False   # diizinkan lewat sakelar di Pengaturan
         self.reset_login()
 
     def reset_login(self):
@@ -124,6 +154,8 @@ class Sim:
         if self.app == "wasiat":
             self.layar = "w_home" if self.wasiat_login else "w_login"
             return
+        if self.izin_tertunda and IZIN_NOTIF in self.izin_runtime:
+            self.izin_tertunda = False  # izin sudah diberikan lewat adb -> tidak ditanya lagi
         if self.izin_tertunda:
             self.layar = "izin"
         elif self.login_sebagai:
@@ -141,6 +173,8 @@ class Sim:
             self.layar, self.tergulir = tujuan, False
         if self.layar == "login":
             return self.pohon_login
+        if self.layar == "pengaturan":
+            return ET.fromstring(layar_pengaturan(self.overlay_ui).encode("utf-8"))
         kunci = "home_bawah" if (self.layar == "home" and self.tergulir) else self.layar
         return ET.fromstring(LAYAR[kunci].encode("utf-8"))
 
@@ -182,6 +216,7 @@ class El:
         SIM.panggilan.append(("klik", cd or tx))
         if SIM.layar == "izin" and tx == "Izinkan":
             SIM.izin_tertunda = False
+            SIM.izin_runtime.add(IZIN_NOTIF)
             SIM.buka()
         elif SIM.layar == "login":
             if kls == "android.widget.Button" and cd in ("Konsumen", "Personel"):
@@ -199,6 +234,12 @@ class El:
             SIM.jadwal("laporan", SIM.jeda_laporan)
         elif SIM.layar == "w_login" and cd == "Masuk dengan Google":
             SIM.jadwal("w_pemilih", 0.3)
+        elif SIM.layar == "home" and cd == "Aktifkan tampilan mengambang":
+            if "SYSTEM_ALERT_WINDOW" in SIM.appops or SIM.overlay_ui:
+                SIM.layar = "mengambang"
+            else:
+                SIM.panggilan.append(("buka_pengaturan", "overlay"))
+                SIM.layar = "pengaturan"
         elif SIM.layar == "home" and cd == "Keluar":
             SIM.login_sebagai = None
             SIM.buka()
@@ -271,7 +312,8 @@ class Driver:
         if SIM.layar.startswith("w_"):
             SIM.pohon()  # jalankan transisi yang sudah jatuh tempo
             return PKG_GMS if SIM.layar == "w_pemilih" else PKG_WASIAT
-        return {"launcher": "com.miui.home", "izin": "com.google.android.permissioncontroller"}.get(SIM.layar, PKG)
+        return {"launcher": "com.miui.home", "izin": "com.google.android.permissioncontroller",
+                "pengaturan": PKG_SETELAN}.get(SIM.layar, PKG)
 
     def get_screenshot_as_file(self, p):
         """PNG sungguhan seukuran layar HP (latar putih, kotak abu-abu per elemen berlabel)."""
@@ -298,7 +340,7 @@ class Driver:
 
     def back(self):
         SIM.transisi = None
-        SIM.layar = "home" if SIM.layar in ("laporan", "memuat") else "launcher"
+        SIM.layar = "home" if SIM.layar in ("laporan", "memuat", "pengaturan", "mengambang") else "launcher"
 
     def get_window_size(self):
         return {"width": 1220, "height": 2712}
@@ -312,6 +354,10 @@ class Driver:
     def tap(self, posisi, duration=None):
         SIM.panggilan.append(("tap", posisi))
         x, y = posisi[0]
+        if SIM.layar == "pengaturan" and 1020 <= x <= 1160 and 760 <= y <= 840:
+            SIM.overlay_ui = True
+            SIM.panggilan.append(("sakelar_overlay", True))
+            return
         if SIM.layar == "w_pemilih":
             for e in SIM.pohon().iter():
                 b = [int(v) for v in re.findall(r"-?\d+", e.get("bounds") or "")]
@@ -344,7 +390,27 @@ def adb_palsu(*args, timeout=60):
         if k in s:
             return v
     if "dumpsys package" in s:
-        return "    versionName=1.0.5\n" if PKG_WASIAT in s else ("    versionName=2.2.27\n" if PKG in s else "")
+        if PKG_WASIAT in s:
+            return "    versionName=1.0.5\n"
+        if PKG not in s:
+            return ""
+        diminta = IZIN_DIMINTA + ["android.permission.SYSTEM_ALERT_WINDOW",
+                                  "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"]
+        return ("    versionName=2.2.27\n    requested permissions:\n"
+                + "".join(f"      {x}\n" for x in ["android.permission.INTERNET"] + diminta)
+                + "    install permissions:\n      android.permission.INTERNET: granted=true\n"
+                + "    User 0: installed=true\n      runtime permissions:\n"
+                + "".join(f"        {x}: granted={'true' if x in SIM.izin_runtime else 'false'}, flags=[ ]\n"
+                          for x in IZIN_DIMINTA))
+    if s.startswith("shell pm grant"):
+        izin = args[-1]
+        if "BACKGROUND" in izin and "android.permission.ACCESS_FINE_LOCATION" not in SIM.izin_runtime:
+            return "Exception occurred while executing 'grant': java.lang.SecurityException\n"
+        SIM.izin_runtime.add(izin)
+        return ""
+    if s.startswith("shell appops set"):
+        SIM.appops.add(args[-2])
+        return ""
     if "am force-stop" in s:
         SIM.layar = "launcher"
         SIM.transisi = None
@@ -353,6 +419,9 @@ def adb_palsu(*args, timeout=60):
         SIM.wasiat_login = None
         return "Success\n"
     if "pm clear" in s:
+        SIM.izin_runtime.clear()
+        SIM.appops.clear()
+        SIM.overlay_ui = False
         SIM.login_sebagai, SIM.izin_tertunda = None, True
         SIM.reset_login()
         return "Success\n"

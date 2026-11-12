@@ -19,6 +19,11 @@ ulang yang spesifik oleh LLM Perancang.
   konfirmasi dengan melihat screenshot sebelum menjadikannya temuan).
 - Gambar: screenshot asli tiap layar baru, versi beranotasi (kotak berkode sesuai daftar masalah), dan frame
   rekaman layar saat aplikasi sedang memuat (untuk menilai ada tidaknya indikator loading atau layar kosong).
+- Izin: di kepala tiap LANGKAH UJI tertulis apakah izin aplikasi diberikan otomatis lewat adb sebelum uji. Kalau
+  ya, dialog izin aplikasi memang tidak terlihat, jadi jangan menilai alur izin dari run itu. Langkah dengan
+  "keluar_ke_pengaturan" berarti aplikasi membawa pengguna ke layar sistem di luar aplikasi (Pengaturan/dialog
+  izin); langkah "izinkan_di_pengaturan_*" dilakukan skrip, bukan bagian aplikasi. Nilai hal ini sebagai temuan UX
+  (pengguna dipaksa keluar aplikasi, apakah ada penjelasan sebelumnya, apakah fitur bisa dipakai tanpa izin itu).
 - EVALUASI SEBELUMNYA (kalau ada): perbarui dan lengkapi, jangan mulai dari nol. Kembalikan daftar temuan
   LENGKAP (lama yang masih berlaku + baru), bukan hanya yang baru.
 
