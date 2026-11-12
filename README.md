@@ -100,8 +100,11 @@ python agen_uji.py siapkan
    menggulir untuk menemukan elemen di bawah, membuka lembar bawah/dialog, berpindah tab, lalu kembali lewat Back atau
    tab semula. Kalau tersesat, aplikasi dibuka ulang dan jalur ketukan diputar ulang. Item daftar sejenis (nama,
    pesanan, anomali) cukup diwakili dua contoh **kalau** keduanya menuju layar yang sama; menu yang menuju layar
-   berbeda tetap diketuk semua. Crash, error di log, tombol yang tidak bereaksi, dan elemen yang tak terjangkau
-   dicatat. Tombol pengubah data tidak diketuk di tahap ini.
+   berbeda tetap diketuk semua; kisi seragam seperti tanggal di kalender juga cukup dua contoh. Satu layar dibatasi
+   sekitar 1/8 anggaran ketukan, dan kalau 6 elemen berturut-turut tidak bisa diketuk, sisanya diserahkan ke LLM
+   supaya penjelajah tidak macet di satu layar. Setiap 25 ketukan log menampilkan kemajuan. Crash, error di log,
+   tombol yang tidak bereaksi, dan elemen yang tak terjangkau dicatat. Tombol pengubah data tidak diketuk di tahap
+   ini.
 3. **Uji mendalam oleh LLM** (putaran berikutnya), mengikuti daftar uji yang dibuat otomatis dari layar yang
    ditemukan:
    - validasi form: kirim kosong, format salah, teks panjang, emoji;
@@ -258,6 +261,7 @@ lanjutkan dari langkah yang gagal dengan perintah di atas.
 | `gambar_ok: false` di cek-llm | model tidak membaca gambar; ganti model di llm.json |
 | Login dilewati padahal akun berbeda | hapus `.n8n-files\uji-ui\status_login.json` (dibuat ulang otomatis) |
 | `perubahan data GAGAL dipulihkan` | lihat tabel "Perubahan data dan pemulihan" di laporan; hapus manual data berpenanda UJI-... |
+| Log berulang `jelajah_menuju_...` / `GAGAL ... tertutup` di satu dialog | versi lama menganggap lapisan gelap di belakang dialog/lembar bawah (label "Tutup") menutupi isinya; sudah diperbaiki, perbarui file |
 | Penjelajah berhenti sebelum semua menu (`habis_anggaran`) | naikkan `batas_ketukan_jelajah` / `batas_menit_jelajah`; sisanya dikerjakan LLM |
 | `tap diblokir: ... data buatan uji` | wajar: hapus/ubah status hanya untuk data berpenanda; Perancang akan membuat data uji dulu |
 
@@ -268,8 +272,8 @@ sebaiknya diverifikasi manual sebelum dijadikan keputusan.
 ## Pengujian kode (tanpa HP dan tanpa LLM)
 
 `tests/` berisi simulator HP (struktur layar login Santa Maria asli, aplikasi Wasiat tiruan dengan pemilih akun
-Google, dan aplikasi demo dengan tab, lembar bawah, menu di bawah bilah navigasi, crash, tombol mati, teks janggal,
-sakelar, dan CRUD) serta server OpenAI-compatible tiruan pengganti 9router.
+Google, dan aplikasi demo dengan tab, lembar bawah, dialog kalender layar penuh beserta lapisan penutupnya, menu di bawah
+bilah navigasi, crash, tombol mati, teks janggal, sakelar, dan CRUD) serta server OpenAI-compatible tiruan pengganti 9router.
 
 ```
 python tests/test_agen_uji.py

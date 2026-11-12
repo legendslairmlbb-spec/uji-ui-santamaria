@@ -575,7 +575,7 @@ def analisis_xml(xml, density=None, maks_daftar=25, zona=None):
                 if alasan:
                     janggal.append(ringkas(el, teks=teks[:120], alasan=alasan))
 
-    daun = [el for el in terlihat if _label(el) and _bounds(el.get("bounds"))
+    daun = [el for el in terlihat if _label(el) and _bounds(el.get("bounds")) and not adalah_penghalang(el, W, H)
             and not any(_label(c) for c in el.iter() if c is not el)]
     bertumpuk = []
     for i, a in enumerate(daun):
@@ -657,11 +657,14 @@ def daftar_elemen(xml, density=None, maks=80, kotak=False, zona=None):
             item["pusat"] = [(b[0] + b[2]) // 2, (b[1] + b[3]) // 2]
             if kotak:
                 item["kotak"] = b
-                if terpotong(el, induk, W, H, zona or []):
-                    item["terpotong"] = True
-                _, porsi = titik_terlihat(root, el, zona or [], urut, induk, ambang=0.0)
-                if porsi < 0.9:
-                    item["tertutup"] = True
+                if adalah_penghalang(el, W, H):
+                    item["penghalang"] = True  # lapisan di belakang dialog/lembar bawah; mengetuknya menutup dialog
+                else:
+                    if terpotong(el, induk, W, H, zona or []):
+                        item["terpotong"] = True
+                    _, porsi = titik_terlihat(root, el, zona or [], urut, induk, ambang=0.0)
+                    if porsi < 0.9:
+                        item["tertutup"] = True
         u = _ukuran_dp(el, density)
         if u:
             item["ukuran_dp"] = f"{u[0]}x{u[1]}"
@@ -797,28 +800,65 @@ def cari_node(root, target, urut=None, utamakan_klik=True):
     return None
 
 
-def titik_terlihat(root, node, zona=(), urut=None, induk=None, ambang=0.3):
+def adalah_penghalang(el, W, H):
+    """Lapisan penutup di belakang dialog/lembar bawah (ModalBarrier Flutter, berlabel 'Tutup'/'Dismiss'): bisa
+    diklik, selebar layar, tanpa isi. Di urutan dokumen ia bisa muncul SESUDAH isi dialog padahal digambar di
+    bawahnya, jadi tidak boleh dianggap menutupi elemen lain."""
+    if el.get("clickable") != "true" or W <= 0 or H <= 0:
+        return False
+    b = _bounds(el.get("bounds"))
+    luas = (b[2] - b[0]) * (b[3] - b[1]) if b else 0
+    if luas < (0.5 if el.get("dismissable") == "true" else 0.95) * W * H:
+        return False
+    return not any(c is not el and (c.get("clickable") == "true" or _label(c)) for c in el.iter())
+
+
+def ada_lapisan_modal(xml):
+    """True kalau layar sedang menampilkan dialog/lembar bawah modal (ada lapisan penutup)."""
+    try:
+        root = _root(xml) if xml else None
+    except ET.ParseError:
+        return False
+    if root is None:
+        return False
+    W, H = ukuran_layar_xml(root)
+    return any(adalah_penghalang(el, W, H) for el in root.iter())
+
+
+def titik_terlihat(root, node, zona=(), urut=None, induk=None, ambang=0.3, abaikan_dalam=None):
     """Titik ketuk pada bagian elemen yang benar-benar terlihat: di luar bilah sistem/papan ketik (zona) dan tidak
     tertutup elemen yang digambar di atasnya (elemen sesudahnya dalam urutan dokumen yang bisa diklik atau berlabel,
-    misalnya bilah navigasi mengambang atau lembar bawah). Kembalikan ((x, y), porsi_terlihat); titik None kalau yang
-    terlihat < ambang."""
+    misalnya bilah navigasi mengambang atau lembar bawah; lapisan penutup dialog tidak dihitung). Untuk lapisan
+    penutup itu sendiri, semua isi lain dianggap di atasnya. abaikan_dalam: penutup di dalam node ini tidak dihitung.
+    Kembalikan ((x, y), porsi_terlihat); titik None kalau yang terlihat < ambang."""
     b = _bounds(node.get("bounds"))
     if not b or b[2] - b[0] < 2 or b[3] - b[1] < 2:
         return None, 0.0
     if urut is None or induk is None:
         urut, induk = pohon_induk(root)
     lewati = {id(x) for x in node.iter()} | {id(x) for x in leluhur(node, induk)}
-    try:
-        mulai = urut.index(node)
-    except ValueError:
-        mulai = len(urut)
+    if abaikan_dalam is not None:
+        lewati |= {id(x) for x in abaikan_dalam.iter()}
+    W, H = ukuran_layar_xml(root)
     penutup = []
-    for el in urut[mulai + 1:]:
-        if id(el) in lewati or not (el.get("clickable") == "true" or _label(el)):
-            continue  # kontainer gulir sendiri tidak dihitung; isinya (anak berlabel/bisa diklik) yang menutupi
-        bb = _bounds(el.get("bounds"))
-        if bb and _tumpang(bb, b):
-            penutup.append(bb)
+    if adalah_penghalang(node, W, H):
+        for el in urut:  # digambar paling bawah: bagian yang tertutup isi dialog/lembar bawah tidak bisa diketuk
+            bb = _bounds(el.get("bounds"))
+            if (id(el) not in lewati and bb and _tumpang(bb, b)
+                    and (bb[2] - bb[0]) * (bb[3] - bb[1]) < 0.95 * W * H):
+                penutup.append(bb)
+        ambang = min(ambang, 0.04)
+    else:
+        try:
+            mulai = urut.index(node)
+        except ValueError:
+            mulai = len(urut)
+        for el in urut[mulai + 1:]:
+            if id(el) in lewati or not (el.get("clickable") == "true" or _label(el)):
+                continue  # kontainer gulir sendiri tidak dihitung; isinya (anak berlabel/bisa diklik) yang menutupi
+            bb = _bounds(el.get("bounds"))
+            if bb and _tumpang(bb, b) and not adalah_penghalang(el, W, H):
+                penutup.append(bb)
     w, h = b[2] - b[0], b[3] - b[1]
     sampel = [(b[0] + w * fx, b[1] + h * fy) for fy in (0.5, 0.3, 0.7, 0.12, 0.88) for fx in (0.5, 0.3, 0.7, 0.12, 0.88)]
     batas = [[z[0] - 8, z[1] - 8, z[2] + 8, z[3] + 8] for z in zona]
@@ -1140,12 +1180,16 @@ class Pelaksana:
         except Exception as e:  # noqa: BLE001
             log("  gagal menggulir:", str(e)[:120])
         time.sleep(0.5)
+        return arah
 
     def siapkan_ketuk(self, target, batas_cari=10.0, maks_gulir=3):
         """Cari elemen target di page source, gulir kalau tertutup/terpotong, lalu kembalikan titik ketuk yang aman.
+        Hanya menggulir kontainer gulir milik elemen itu, dan hanya kalau penutupnya bilah sistem atau elemen di luar
+        kontainer itu (menggulir tidak membantu kalau penutupnya ikut tergulir). Kalau tetap tertutup, posisi gulir
+        dikembalikan supaya layar tidak berubah.
         Hasil: {"titik", "node", "xml", "digulir", "porsi"} atau {"alasan": "tidak_ditemukan"|"tertutup", ...}."""
         akhir = time.perf_counter() + batas_cari
-        digulir, xml, node, keyboard_ditutup = 0, None, None, False
+        digulir, xml, node, keyboard_ditutup, arah_gulir = 0, None, None, False, []
         while True:
             try:
                 xml = self.d.page_source
@@ -1156,7 +1200,8 @@ class Pelaksana:
                 urut, induk = pohon_induk(root)
                 node = cari_node(root, target, urut)
                 if node is not None:
-                    titik, porsi = titik_terlihat(root, node, self.zona_sistem(), urut, induk)
+                    zona = self.zona_sistem()
+                    titik, porsi = titik_terlihat(root, node, zona, urut, induk)
                     if titik:
                         return {"titik": titik, "node": node, "xml": xml, "digulir": digulir, "porsi": porsi}
                     if not keyboard_ditutup and self.keyboard_tampil():
@@ -1164,10 +1209,15 @@ class Pelaksana:
                         self.tutup_keyboard()
                         time.sleep(0.4)
                         continue
-                    if digulir < maks_gulir:
-                        self.gulir_ke(node, root, induk)
+                    sc = _scroll_terdekat(node, induk)
+                    membantu = sc is not None and titik_terlihat(root, node, zona, urut, induk,
+                                                                 abaikan_dalam=sc)[0] is None
+                    if digulir < maks_gulir and membantu:
+                        arah_gulir.append(self.gulir_ke(node, root, induk))
                         digulir += 1
                         continue
+                    for a in reversed(arah_gulir):  # tetap tertutup: kembalikan posisi gulir semula
+                        self.gulir_ke(node, root, induk, arah="atas" if a == "bawah" else "bawah")
                     return {"alasan": "tertutup", "node": node, "xml": xml, "digulir": digulir, "porsi": porsi}
             if time.perf_counter() >= akhir:
                 return {"alasan": "tidak_ditemukan", "xml": xml, "digulir": digulir}
@@ -1204,8 +1254,9 @@ class Pelaksana:
         return self.paket_aktif() == self.pkg
 
     def coba_pulihkan_target(self, target, info, batas_cari):
-        """Target tidak bisa diketuk: coba kembalikan aplikasi ke depan, tutup lapisan (Back) kalau target tadi
-        terlihat, atau cari dengan menggulir. Kembalikan (info_baru, catatan_pemulihan)."""
+        """Target tidak bisa diketuk: coba kembalikan aplikasi ke depan, tunggu penutup sementara (snackbar/animasi),
+        tutup lapisan (Back) kalau ada dialog/lembar bawah atau target tadi terlihat, atau cari dengan menggulir.
+        Kembalikan (info_baru, catatan_pemulihan)."""
         catatan = []
         paket = self.paket_aktif()
         if paket and paket != self.pkg and not POLA_PENGATURAN.search(paket):
@@ -1214,7 +1265,15 @@ class Pelaksana:
             info = self.siapkan_ketuk(target, min(batas_cari, 5))
             if info.get("titik"):
                 return info, catatan
-        if self.pernah_terlihat(target) or info.get("alasan") == "tertutup":
+        if info.get("alasan") == "tertutup":
+            catatan.append("target tertutup elemen lain; tunggu sebentar (snackbar/animasi) lalu coba lagi")
+            time.sleep(2.5)
+            info2 = self.siapkan_ketuk(target, 2)
+            if info2.get("titik"):
+                return info2, catatan
+            info = info2 if info2.get("alasan") else info
+        lapisan = info.get("alasan") == "tertutup" and ada_lapisan_modal(info.get("xml"))
+        if lapisan or (info.get("alasan") == "tidak_ditemukan" and self.pernah_terlihat(target)):
             catatan.append("target tertutup lapisan lain (lembar bawah/dialog); tekan Back sekali")
             self.d.back()
             time.sleep(0.8)
@@ -2538,13 +2597,25 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
 
 
 # ====================================================================== penjelajah otomatis (tanpa LLM)
+_BULAN = ("januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|january|february|"
+          "march|may|june|july|august|october|december|jan|feb|mar|apr|jun|jul|agu|agt|aug|sep|sept|okt|oct|nov|des|dec")
+_HARI = ("senin|selasa|rabu|kamis|jumat|jum'at|sabtu|minggu|ahad|monday|tuesday|wednesday|thursday|friday|saturday|"
+         "sunday|sen|sel|rab|kam|jum|sab|min|mon|tue|wed|thu|fri|sat|sun")
+POLA_TANGGAL_NORM = re.compile(rf"#[ ,.-]*\b(?:{_BULAN})\b\.?|\b(?:{_BULAN})\b\.?[ ,.-]*#")
+
+
 def _norm_label(teks):
     """Label untuk mengenali layar/elemen yang sama walau datanya berbeda: penanda data uji dan angka jadi '#',
+    nama bulan/hari di dalam tanggal jadi 'bln'/'hr' (sel kalender tetap sama walau bulannya bergeser),
     emoji/simbol dibuang, huruf kecil."""
     t = re.sub(r"UJI-\d{4}-\d{6}", "#", str(teks or "").split("\n")[0])
     t = re.sub(r"[^\w#/ .,:'()-]+", " ", re.sub(r"\d+", "#", t))
     t = re.sub(r"#(\s*#)+", "#", t)
-    return " ".join(t.split()).lower()[:40]
+    t = " ".join(t.split()).lower()
+    if POLA_TANGGAL_NORM.search(t):
+        t = POLA_TANGGAL_NORM.sub(lambda m: "# bln" if m.group(0).startswith("#") else "bln #", t)
+        t = re.sub(rf"\b(?:{_HARI})\b", "hr", t)
+    return t[:40]
 
 
 def tanda_layar(root):
@@ -2570,10 +2641,14 @@ class Penjelajah:
     Item daftar yang sejenis cukup diwakili beberapa contoh. Tombol yang mengubah data dicatat 'diblokir' (bahan uji
     CRUD oleh LLM Perancang). Kalau tersesat, aplikasi dimulai ulang lalu jalur menuju layar diputar ulang."""
 
-    def __init__(self, p, batas_ketukan=300, batas_menit=40.0, maks_kedalaman=6, maks_per_grup=2):
+    def __init__(self, p, batas_ketukan=300, batas_menit=40.0, maks_kedalaman=6, maks_per_grup=2, maks_per_layar=None,
+                 maks_gagal_beruntun=6):
         self.p = p
         self.batas_ketukan, self.batas_detik = batas_ketukan, batas_menit * 60
         self.maks_kedalaman, self.maks_per_grup = maks_kedalaman, maks_per_grup
+        # Satu layar tidak boleh menghabiskan anggaran semua layar lain (mis. kalender atau daftar sangat panjang).
+        self.maks_per_layar = maks_per_layar or max(30, batas_ketukan // 8)
+        self.maks_gagal_beruntun = maks_gagal_beruntun
         self.layar, self.status, self.posisi_tetap, self.grup = [], {}, {}, {}
         self.ketukan, self.pemulihan, self.t0 = 0, 0, time.perf_counter()
         p.saring_screenshot = self.perlu_screenshot
@@ -2589,18 +2664,32 @@ class Penjelajah:
         except ET.ParseError:
             return None
 
+    @staticmethod
+    def mirip_layar(L, tanda):
+        """Kemiripan dengan layar L, termasuk varian hasil digulir (isi daftar panjang berganti saat digulir)."""
+        return max(mirip(t, tanda) for t in [L["tanda"]] + L.get("varian", []))
+
     def cari_layar(self, root):
         tanda, paket = tanda_layar(root), paket_xml(root)
-        nilai = [(mirip(L["tanda"], tanda), L) for L in self.layar if L["paket"] == paket]
+        nilai = [(self.mirip_layar(L, tanda), L) for L in self.layar if L["paket"] == paket]
         n, L = max(nilai, key=lambda x: x[0], default=(0, None))
         return L if n >= 0.6 else None
+
+    def tambah_varian(self, L, root):
+        """Layar L sesudah digulir penjelajah sendiri (tanpa pindah layar): simpan sidiknya supaya tetap dikenali."""
+        if root is None or paket_xml(root) != L["paket"]:
+            return
+        tanda = tanda_layar(root)
+        if self.mirip_layar(L, tanda) < 0.9 and len(L.setdefault("varian", [])) < 8:
+            L["varian"].append(tanda)
 
     def kenali(self, root, jalur=None, dari=None, ref=None, screenshot=None):
         L = self.cari_layar(root)
         if L is not None:
             return L, False
         L = {"id": f"J{len(self.layar) + 1}", "tanda": tanda_layar(root), "paket": paket_xml(root), "jalur": jalur or [],
-             "dari": dari, "judul": judul_layar(root), "ref": ref, "screenshot": screenshot, "tab_terpilih": None}
+             "dari": dari, "judul": judul_layar(root), "ref": ref, "screenshot": screenshot, "tab_terpilih": None,
+             "ketukan": 0}
         self.layar.append(L)
         return L, True
 
@@ -2612,11 +2701,12 @@ class Penjelajah:
         return paket_xml(root) == self.p.pkg and self.cari_layar(root) is None
 
     def cocok(self, root, L):
-        return root is not None and paket_xml(root) == L["paket"] and mirip(tanda_layar(root), L["tanda"]) >= 0.6
+        return root is not None and paket_xml(root) == L["paket"] and self.mirip_layar(L, tanda_layar(root)) >= 0.6
 
     # ---------- elemen yang bisa dijelajah di satu layar
     def kandidat(self, root, L):
         urut, induk = pohon_induk(root)
+        W, H = ukuran_layar_xml(root)
         kotak_berlabel = {el.get("bounds") for el in urut if el.get("clickable") == "true" and _label(el)}
         calon = []
         for el in urut:
@@ -2624,6 +2714,8 @@ class Penjelajah:
             kelas = el.get("class") or ""
             if not b or el.get("clickable") != "true" or el.get("enabled") == "false" or kelas == "android.widget.EditText":
                 continue
+            if adalah_penghalang(el, W, H):
+                continue  # lapisan penutup dialog/lembar bawah: ditutup lewat Back atau tombol Tutup, bukan diketuk
             lb = _label(el)
             if not lb and el.get("bounds") in kotak_berlabel:
                 continue  # pembungkus kembar tanpa label: tombol berlabelnya yang diketuk
@@ -2632,8 +2724,12 @@ class Penjelajah:
             if lb:
                 atr = "content-desc" if el.get("content-desc") == lb else "text"
                 sama = [x for x in urut if x.get(atr) == lb and _bounds(x.get("bounds"))]
-                k = sama.index(el) if el in sama else 0
-                target = {"label": lb, **({"urutan": k} if len(sama) > 1 else {})}
+                if len(sama) > 1:  # label kembar (mis. judul halaman = nama tab): sempitkan dengan kelas elemennya,
+                    sama = [x for x in sama if x.get("class") == kelas]  # supaya tetap ketemu di layar lain
+                    k = sama.index(el) if el in sama else 0
+                    target = {"label": lb, "kelas": kelas, **({"urutan": k} if len(sama) > 1 else {})}
+                else:
+                    target = {"label": lb}
             elif turunan:
                 target = {"label_mengandung": turunan[0].split("\n")[0][:60]}
             else:
@@ -2649,6 +2745,21 @@ class Penjelajah:
             calon.append({"kunci": kunci, "nama": nama.replace("\n", " ")[:80], "kelas": kelas.split(".")[-1],
                           "target": target, "bounds": el.get("bounds"), "grup": grup,
                           "terpilih": el.get("selected") == "true", "risiko": jenis_risiko(nama)})
+        ukuran = {}
+        for c in calon:
+            if c["grup"]:
+                ukuran[c["grup"]] = ukuran.get(c["grup"], 0) + 1
+        # Kisi seragam (mis. sel tanggal kalender): kolom-kolom berukuran sama yang labelnya berpola sama = satu daftar.
+        # Kisi menu dengan label berbeda-beda tetap per kolom.
+        kisi = {}
+        for c in calon:
+            g = c["grup"]
+            if g and ukuran[g] >= 3:
+                kisi.setdefault((g[0], g[1], g[2], g[4], g[5]), []).append(c)
+        for kunci_kisi, anggota in kisi.items():
+            if len({c["grup"][3] for c in anggota}) >= 3 and len({_norm_label(c["nama"]) for c in anggota}) <= 3:
+                for c in anggota:
+                    c["grup"] = ("kisi",) + kunci_kisi
         ukuran = {}
         for c in calon:
             if c["grup"]:
@@ -2733,6 +2844,11 @@ class Penjelajah:
     def ketuk(self, c, L):
         p = self.p
         self.ketukan += 1
+        L["ketukan"] = L.get("ketukan", 0) + 1
+        if self.ketukan % 25 == 0:
+            sisa = sum(1 for s in self.status.values() if s["status"] == "belum")
+            log(f"  penjelajah: {self.ketukan} ketukan, {len(self.layar)} layar, {sisa} elemen menunggu, "
+                f"{(time.perf_counter() - self.t0) / 60:.0f} menit")
         n0 = len(p.langkah)
         p.satu_langkah(0, {"aksi": "tap", "nama": f"jelajah_{self.ketukan:03d}_{_slug(c['nama'] or c['kelas'], 40)}",
                            "target": c["target"], "batas_cari_detik": 2, "tanpa_pemulihan": True,
@@ -2766,8 +2882,16 @@ class Penjelajah:
         p.langkah[-1]["aksi"] = "navigasi_otomatis"
 
     # ---------- penjelajahan
+    def lewati_sisa(self, L, alasan):
+        n = 0
+        for s in self.status.values():
+            if s["layar"] == L["id"] and s["status"] == "belum":
+                s.update(status="dilewati", alasan=alasan)
+                n += 1
+        log(f"  penjelajah: {L['id']} ({L['judul']}): {n} elemen sisanya dilewati ({alasan})")
+
     def jelajahi(self, L, kedalaman=0):
-        digulir, buntu = 0, 0
+        digulir, buntu, gagal_beruntun = 0, 0, 0
         while not self.habis():
             root = self.baca()
             if not self.cocok(root, L):
@@ -2783,6 +2907,7 @@ class Penjelajah:
                     self.gulir("bawah")
                     digulir += 1
                     root2 = self.baca()
+                    self.tambah_varian(L, root2)  # digulir sendiri: tetap layar yang sama walau isinya berganti
                     if root2 is None or {c["kunci"] for c in self.kandidat(root2, L)} <= sebelum:
                         buntu += 1
                     continue
@@ -2796,16 +2921,24 @@ class Penjelajah:
             if g is not None and g["n"] >= self.maks_per_grup and len(g["tujuan"]) <= 1:
                 st.update(status="diwakili", alasan=f"item sejenis; {g['n']} contoh sudah dijelajah dan menuju layar yang sama")
                 continue
+            if L.get("ketukan", 0) >= self.maks_per_layar:
+                self.lewati_sisa(L, f"batas {self.maks_per_layar} ketukan per layar tercapai; dilanjutkan Perancang")
+                break
             hasil, lk, L2 = self.ketuk(c, L)
-            if g is not None:
-                g["n"] += 1
-                g["tujuan"].add(L2["id"] if L2 else hasil)
+            if g is not None and hasil != "tak_terjangkau":
+                g["n"] += 1  # tetap di layar yang sama (memilih, menandai) = satu jenis hasil, berubah atau tidak
+                g["tujuan"].add(L2["id"] if L2 else "layar_sama" if hasil in ("berubah", "tanpa_perubahan") else hasil)
             st.update(status="dijelajah" if hasil not in ("tak_terjangkau", "diblokir", "gagal") else hasil,
                       hasil=hasil + (f" {L2['id']}" if L2 else ""), ref=lk["no"] if lk else None)
             if lk is not None and lk.get("galat") and hasil in ("tak_terjangkau", "diblokir", "gagal"):
                 st["alasan"] = lk["galat"]
-            if hasil in ("tanpa_perubahan", "berubah"):
-                continue
+            gagal_beruntun = gagal_beruntun + 1 if hasil == "tak_terjangkau" else 0
+            if gagal_beruntun >= self.maks_gagal_beruntun:
+                self.lewati_sisa(L, f"{gagal_beruntun} elemen berturut-turut tidak bisa diketuk; kemungkinan tertutup "
+                                    "lapisan yang tidak dikenali")
+                break
+            if hasil in ("tanpa_perubahan", "berubah", "tak_terjangkau", "diblokir"):
+                continue  # tidak berpindah layar: tidak perlu Back
             if hasil == "layar_baru" and L2 is not None and kedalaman < self.maks_kedalaman:
                 log(f"  penjelajah: layar baru {L2['id']} ({L2['judul']}) dari {L['id']}")
                 self.jelajahi(L2, kedalaman + 1)

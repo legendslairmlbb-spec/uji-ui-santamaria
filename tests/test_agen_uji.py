@@ -490,4 +490,62 @@ beda = {k: (ag.jenis_risiko(k), v) for k, v in contoh_risiko.items() if ag.jenis
 cek(not beda, f"klasifikasi risiko label (didapat, seharusnya): {beda}")
 print("25. klasifikasi risiko label: OK ->", len(contoh_risiko), "label")
 
+
+# ---------------------------------------------------------------- 26. dialog kalender Flutter + lapisan penutup
+# XML asli dari HP: pemilih rentang tanggal layar penuh. Lapisan penutup 'Tutup' (ModalBarrier) muncul paling akhir
+# di urutan dokumen padahal digambar paling bawah; dulu semua tanggal dianggap tertutup dan penjelajah berputar-putar.
+zona_hp = [[0, 0, 1220, 110], [0, 2580, 1220, 2712]]
+xml_kal = (fix / "kalender_rentang_flutter.xml").read_text(encoding="utf-8")
+root_kal = ag._root(xml_kal)
+urut_k, induk_k = ag.pohon_induk(root_kal)
+W_k, H_k = ag.ukuran_layar_xml(root_kal)
+penghalang = [el for el in urut_k if ag.adalah_penghalang(el, W_k, H_k)]
+cek(len(penghalang) == 1 and ag._label(penghalang[0]) == "Tutup", f"lapisan penutup dikenali: {len(penghalang)}")
+bisa = [el for el in urut_k if el.get("clickable") == "true" and el not in penghalang]
+tertutup = [ag._label(el) for el in bisa if ag.titik_terlihat(root_kal, el, zona_hp, urut_k, induk_k)[0] is None]
+cek(len(bisa) >= 60 and not tertutup, f"tombol & tanggal di dialog harus bisa diketuk: {tertutup[:5]}")
+cek(ag.titik_terlihat(root_kal, penghalang[0], zona_hp, urut_k, induk_k)[0] is None,
+    "lapisan penutup dialog layar penuh tidak punya area terbuka untuk diketuk")
+el_kal = ag.daftar_elemen(xml_kal, 3.0, maks=200, kotak=True, zona=zona_hp)
+cek(sum(1 for e in el_kal if e.get("penghalang")) == 1 and not any(e.get("tertutup") for e in el_kal),
+    "daftar elemen: penghalang ditandai, tidak ada yang 'tertutup'")
+cek(not ag.analisis_xml(xml_kal, 3.0, zona=zona_hp)["masalah"]["elemen_bertumpuk"], "penghalang bukan elemen bertumpuk")
+cek(ag._norm_label("1, Minggu, 1 November 2026") == ag._norm_label("27, Rabu, 27 Desember 2026") == "#, hr, # bln #"
+    and ag._norm_label("Pesanan #12") == "pesanan #", "normalisasi tanggal")
+xml_kal2 = (fix / "kalender_rentang_flutter_digulir.xml").read_text(encoding="utf-8")
+cek(ag.mirip(ag.tanda_layar(root_kal), ag.tanda_layar(ag._root(xml_kal2))) >= 0.8,
+    "kalender yang digulir tetap dikenali sebagai layar yang sama")
+cek(ag.ada_lapisan_modal(xml_kal) and not ag.ada_lapisan_modal(simulator.LOGIN_XML), "deteksi dialog modal")
+
+# Penjelajah di aplikasi demo dengan dialog kalender yang sama strukturnya.
+simulator.demo_reset()
+SIM.d_kalender = True
+n0 = len(SIM.panggilan)
+t0 = __import__("time").perf_counter()
+kode, baris, err = jalankan_cli("--akun", str(F_DEMO), "jelajahi", "--app", "demo", "--batas-ketukan", "80")
+h = json_terakhir(baris)
+cek(kode == 0 and h["status"] == "selesai", f"jelajahi demo + kalender: {h}\n{err[-2000:]}")
+j = json.loads((Path(h["folder"]) / "jelajah.json").read_text(encoding="utf-8"))
+L_kal = [L["id"] for L in j["layar"] if "Pilih rentang tanggal" in L["judul"]]
+cek(len(L_kal) >= 1, f"layar kalender ditemukan: {[L['judul'] for L in j['layar']]}")
+el_j = [e for e in j["elemen"] if e["layar"] in L_kal]
+st_kal = {}
+for e in el_j:
+    st_kal.setdefault(e["status"], []).append(e["label"])
+tgl = [e for e in el_j if e["label"] and e["label"][0].isdigit()]
+cek(not st_kal.get("tak_terjangkau") and not st_kal.get("dilewati"), f"tidak ada yang tak terjangkau: {st_kal}")
+cek(1 <= sum(1 for e in tgl if e["status"] == "dijelajah") <= 2 and sum(1 for e in tgl if e["status"] == "diwakili") >= 20,
+    f"kisi tanggal diwakili 2 contoh: {[(e['label'][:12], e['status']) for e in tgl[:10]]}")
+cek(any(e["label"] == "Tutup" and e["status"] == "dijelajah" for e in el_j)
+    and any(e["label"] == "Beralih ke masukan" and e["status"] == "dijelajah" for e in el_j), f"tombol kepala dijelajah: {st_kal}")
+baru = SIM.panggilan[n0:]
+cek(not any(x[0] == "tap_penghalang" for x in baru), "lapisan penutup tidak diketuk")
+cek(not any(x[0] == "demo_simpan_tanggal" for x in baru) and len([x for x in baru if x[0] == "demo_pilih_tanggal"]) <= 2,
+    "tanggal dipilih paling banyak 2 kali, Simpan tidak ditekan")
+r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
+menuju = [l["langkah"] for l in r["langkah"] if l["langkah"].startswith(tuple(f"jelajah_menuju_{x}" for x in L_kal))]
+cek(len(menuju) <= 4 and j["statistik"]["pemulihan_jalur"] <= 12, f"tidak berputar-putar: menuju={len(menuju)} {j['statistik']}")
+SIM.d_kalender = False
+print(f"26. dialog kalender + lapisan penutup: OK -> {len(bisa)} elemen terjangkau, {j['statistik']}")
+
 print(f"\nSEMUA {lulus} CEK LULUS (hasil uji di {TMP})")

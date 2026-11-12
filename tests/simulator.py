@@ -237,6 +237,7 @@ class Sim:
         self.pesawat = False                      # mode pesawat
         self.d_pesanan = [f"Pesanan #{i}" for i in range(1, 7)]   # aplikasi demo
         self.d_tergulir, self.d_fingerprint, self.d_detail, self.d_form = False, False, None, ""
+        self.d_kalender, self.d_kal_geser, self.d_kal_pilih, self.d_kal_masukan = False, 0, [], False
         self.reset_login()
 
     def reset_login(self):
@@ -553,13 +554,17 @@ class Driver:
                         SIM.layar = "w_memuat"
                         SIM.jadwal("w_home", 0.8, lambda: setattr(SIM, "wasiat_login", email))
                     return
-        atas = None  # elemen yang bisa diklik dan digambar paling atas (terakhir dalam urutan dokumen)
-        for e in SIM.pohon().iter():
+        kena = []  # elemen yang bisa diklik di titik itu; yang digambar paling atas = terakhir dalam urutan dokumen,
+        for e in SIM.pohon().iter():  # kecuali lapisan penutup dialog (selebar layar, tanpa isi): selalu paling bawah
             b = [int(v) for v in re.findall(r"-?\d+", e.get("bounds") or "")]
             if e.get("clickable") == "true" and len(b) == 4 and b[0] <= x < b[2] and b[1] <= y < b[3]:
-                atas = e
-        if atas is not None:
-            El(atas).click()
+                kena.append((e, b == [0, 0, 1220, 2712] and len(e) == 0))
+        biasa = [e for e, penutup in kena if not penutup]
+        if biasa:
+            El(biasa[-1]).click()
+        elif kena:
+            SIM.panggilan.append(("tap_penghalang", SIM.layar))
+            El(kena[-1][0]).click()
 
     def start_recording_screen(self, **o):
         SIM.panggilan.append(("rekam_mulai", o))
@@ -617,10 +622,14 @@ def demo_layar():
                      _d("android.view.View", scrollable="true", bounds="[0,600][1220,2540]", anak=isi),
                      _nav_demo("Dasbor"), pkg=PKG_DEMO)
     if L == "d_peta":
+        tanggal = (_d("android.widget.Button", content_desc="Tanggal", clickable="true", bounds="[40,460][600,600]")
+                   if SIM.d_kalender else "")
         return layar(judul("Peta"),
                      _d("android.widget.Button", content_desc="Filter Nama", clickable="true", bounds="[40,300][600,440]"),
                      _d("android.widget.Button", content_desc="Sinkronkan", clickable="true", bounds="[620,300][1180,440]"),
-                     _nav_demo("Peta"), pkg=PKG_DEMO)
+                     tanggal, _nav_demo("Peta"), pkg=PKG_DEMO)
+    if L == "d_kalender":
+        return layar_kalender()
     if L == "d_profil":
         return layar(judul("Profil"),
                      _d("android.widget.Switch", content_desc="Fingerprint", clickable="true", checkable="true",
@@ -656,13 +665,66 @@ def demo_layar():
         opsi = "".join(_d("android.view.View", content_desc=n, clickable="true", bounds=f"[0,{1500 + k * 150}][1220,{1640 + k * 150}]")
                        for k, n in enumerate(("Semua", "Ani", "Budi", "Citra", "Dewi")))
         return layar(_d("android.view.View", content_desc="Pilih Nama", heading="true", bounds="[40,1380][1180,1480]"), opsi,
-                     pkg=PKG_DEMO)
+                     PENGHALANG, pkg=PKG_DEMO)
     raise KeyError(L)
+
+
+PENGHALANG = node("android.view.View", pkg=PKG_DEMO, content_desc="Tutup", clickable="true", dismissable="true",
+                  bounds="[0,0][1220,2712]")  # ModalBarrier Flutter: terakhir di urutan dokumen, digambar paling bawah
+HARI_ID = ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu")
+BULAN_ID = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober",
+            "November", "Desember")
+KOLOM_KAL = ((24, 191), (191, 359), (359, 526), (526, 694), (694, 861), (861, 1029), (1029, 1196))
+
+
+def layar_kalender():
+    """Pemilih rentang tanggal layar penuh seperti showDateRangePicker Flutter (struktur dari HP sungguhan):
+    kepala tetap, kisi tanggal di ScrollView, lapisan penutup 'Tutup' paling akhir di urutan dokumen."""
+    import datetime as _dt
+    pilih = "Beralih ke kalender" if SIM.d_kal_masukan else "Beralih ke masukan"
+    kepala = (_d("android.widget.Button", content_desc="Tutup", clickable="true", bounds="[0,120][168,264]")
+              + _d("android.widget.Button", content_desc="Simpan", clickable="true" if len(SIM.d_kal_pilih) == 2 else "false",
+                   enabled="true" if len(SIM.d_kal_pilih) == 2 else "false", bounds="[902,120][1196,264]")
+              + _d("android.view.View", content_desc="Pilih rentang tanggal Tanggal Mulai to Tanggal Akhir",
+                   bounds="[216,264][1028,480]")
+              + _d("android.widget.Button", content_desc=pilih, clickable="true", bounds="[1052,300][1196,444]"))
+    if SIM.d_kal_masukan:
+        isi = (_d("android.widget.EditText", hint="Tanggal Mulai", clickable="true", bounds="[40,560][1180,700]")
+               + _d("android.widget.EditText", hint="Tanggal Akhir", clickable="true", bounds="[40,740][1180,880]"))
+    else:
+        bulan, tahun, y, blok = 11 + SIM.d_kal_geser, 2026, 606, ""
+        while bulan < 1:
+            bulan, tahun = bulan + 12, tahun - 1
+        while bulan > 12:
+            bulan, tahun = bulan - 12, tahun + 1
+        while y < 2570:
+            awal = _dt.date(tahun, bulan, 1)
+            hari_ke = (awal.weekday() + 1) % 7  # kolom pertama = Minggu
+            n_hari = ((_dt.date(tahun + bulan // 12, bulan % 12 + 1, 1)) - awal).days
+            baris = (hari_ke + n_hari + 6) // 7
+            for d in range(1, n_hari + 1):
+                pos = hari_ke + d - 1
+                x1, x2 = KOLOM_KAL[pos % 7]
+                y1 = y + 174 + (pos // 7) * 150
+                if y1 >= 606 and y1 + 126 <= 2570:
+                    tgl = _dt.date(tahun, bulan, d)
+                    lb = f"{d}, {HARI_ID[tgl.weekday()]}, {d} {BULAN_ID[bulan - 1]} {tahun}"
+                    if tgl == _dt.date(2026, 11, 12):
+                        lb += ", Hari ini"
+                    blok += _d("android.view.View", content_desc=lb, clickable="true", bounds=f"[{x1},{y1}][{x2},{y1 + 126}]")
+            y += 174 + baris * 150 + 12
+            bulan, tahun = (1, tahun + 1) if bulan == 12 else (bulan + 1, tahun)
+        isi = _d("android.widget.ScrollView", scrollable="true", bounds="[0,606][1220,2570]", anak=blok)
+    dialog = _d("android.view.View", bounds="[0,0][1220,2712]",
+                anak=_d("android.view.View", bounds="[0,0][1220,480]", anak=kepala) + isi)
+    return layar(dialog, PENGHALANG, pkg=PKG_DEMO)
 
 
 def demo_gulir(arah):
     if SIM.layar == "d_home":
         SIM.d_tergulir = arah == "down"
+    elif SIM.layar == "d_kalender" and not SIM.d_kal_masukan:
+        SIM.d_kal_geser = max(-6, min(6, SIM.d_kal_geser + (1 if arah == "down" else -1)))
 
 
 def demo_log(tingkat, tag, pesan):
@@ -687,8 +749,21 @@ def demo_klik(cd):
             SIM.layar = "d_laporan"
         elif cd in SIM.d_pesanan:
             SIM.layar, SIM.d_detail = "d_detail", cd
+    elif L == "d_kalender":
+        if cd == "Tutup":
+            SIM.layar = "d_peta"
+        elif cd in ("Beralih ke masukan", "Beralih ke kalender"):
+            SIM.d_kal_masukan = cd == "Beralih ke masukan"
+        elif cd == "Simpan":
+            SIM.panggilan.append(("demo_simpan_tanggal", list(SIM.d_kal_pilih)))
+            SIM.layar = "d_peta"
+        elif re.match(r"\d+, ", cd):
+            SIM.d_kal_pilih = (SIM.d_kal_pilih + [cd])[-2:] if len(SIM.d_kal_pilih) < 2 else [cd]
+            SIM.panggilan.append(("demo_pilih_tanggal", cd))
     elif L == "d_peta":
-        if cd == "Filter Nama":
+        if cd == "Tanggal":
+            SIM.layar, SIM.d_kal_geser, SIM.d_kal_pilih, SIM.d_kal_masukan = "d_kalender", 0, [], False
+        elif cd == "Filter Nama":
             SIM.layar = "d_sheet"
         elif cd == "Sinkronkan":
             demo_log("E", "AndroidRuntime", "FATAL EXCEPTION: main")
@@ -722,12 +797,13 @@ def demo_klik(cd):
 
 def demo_kembali():
     SIM.layar = {"d_notif": "d_home", "d_laporan": "d_home", "d_detail": "d_home", "d_form": "d_home",
-                 "d_sheet": "d_peta", "d_sandi": "d_profil"}.get(SIM.layar, "launcher")
+                 "d_sheet": "d_peta", "d_kalender": "d_peta", "d_sandi": "d_profil"}.get(SIM.layar, "launcher")
 
 
 def demo_reset():
     SIM.d_pesanan = [f"Pesanan #{i}" for i in range(1, 7)]
     SIM.d_tergulir, SIM.d_fingerprint, SIM.d_detail, SIM.d_form = False, False, None, ""
+    SIM.d_kalender, SIM.d_kal_geser, SIM.d_kal_pilih, SIM.d_kal_masukan = False, 0, [], False
 
 
 def adb_palsu(*args, timeout=60):

@@ -716,7 +716,7 @@ def cakupan_elemen(peta):
                     return True
         return False
 
-    peringkat = {"dijelajah": 4, "diwakili": 3, "diblokir": 2, "tak_terjangkau": 1}
+    peringkat = {"dijelajah": 4, "diwakili": 3, "diblokir": 2, "tak_terjangkau": 1, "dilewati": 0.5}
     elemen = {}
 
     def catat(kunci, info):
@@ -742,8 +742,9 @@ def cakupan_elemen(peta):
             continue
         for e in s["elemen"]:
             label = (e.get("label") or "").strip()
-            if not e.get("bisa_diklik") or e.get("kelas") == "EditText" or not label or len(label) > 80:
-                continue
+            if (not e.get("bisa_diklik") or e.get("kelas") == "EditText" or not label or len(label) > 80
+                    or e.get("penghalang")):
+                continue  # lapisan penutup dialog bukan fitur; ditutup lewat Back/tombol Tutup
             kunci = (s["id"], label.split("\n")[0][:60])
             if eks.label_berisiko(label):
                 catat(kunci, {"layar": s["id"], "label": kunci[1], "kelas": e.get("kelas"), "status": "diblokir",
@@ -753,12 +754,13 @@ def cakupan_elemen(peta):
             elif kunci not in elemen:
                 elemen[kunci] = {"layar": s["id"], "label": kunci[1], "kelas": e.get("kelas"), "status": "belum"}
     sandi_layar = {s["id"] for s in peta["layar"] if sum(1 for e in s["elemen"] if e.get("kata_sandi")) >= 2}
-    # Label yang sama di varian layar yang sama (mis. beranda sebelum/sesudah digulir) dihitung satu elemen.
+    # Label yang sama di varian layar yang sama (mis. beranda sebelum/sesudah digulir) dihitung satu elemen; label
+    # yang hanya beda angka/tanggal (baris daftar, sel kalender) juga dihitung satu.
     unik = {}
     for x in sorted(elemen.values(), key=lambda x: -peringkat.get(x["status"], 0)):
-        unik.setdefault(x["label"].lower(), x)
+        unik.setdefault(eks._norm_label(x["label"]) or x["label"].lower(), x)
     sudah = [x for x in unik.values() if x["status"] in ("dijelajah", "diwakili")]
-    belum = [x for x in unik.values() if x["status"] in ("belum", "gagal")]
+    belum = [x for x in unik.values() if x["status"] in ("belum", "gagal", "dilewati")]
     return {"total": len(sudah) + len(belum), "sudah": len(sudah), "belum": belum,
             "diwakili": sum(1 for x in sudah if x["status"] == "diwakili"),
             "aksi_data": [x for x in elemen.values() if x["status"] == "diblokir" and x["layar"] not in sandi_layar],
