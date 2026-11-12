@@ -76,15 +76,17 @@ h = json_terakhir(baris)
 cek(kode == 0 and h["status"] == "selesai" and h["berhasil"], f"contoh rencana harus berhasil: {h}\n{err}")
 r = json.loads(Path(h["ringkasan"]).read_text(encoding="utf-8"))
 nama_langkah = [l["langkah"] for l in r["langkah"]]
-cek(nama_langkah == ["buka_aplikasi", "login_owner_isi_identitas", "login_owner_isi_sandi",
-                     "login_owner_tekan_masuk", "gulir_beranda", "beranda_bawah"], f"urutan langkah: {nama_langkah}")
+cek(nama_langkah == ["buka_aplikasi", "login_owner_isi_identitas", "login_owner_isi_sandi", "login_owner_tekan_masuk",
+                     "gerbang_buka_autostart", "gerbang_centang_autostart", "gerbang_sudah_aktif",
+                     "gerbang_periksa_ulang", "gulir_beranda", "beranda_bawah"], f"urutan langkah: {nama_langkah}")
+cek(SIM.gerbang_ok and all(l["berhasil"] for l in r["langkah"]), "gerbang izin aplikasi harus terlewati")
 cek(("adb", "shell pm clear id.co.santamaria.app") in SIM.panggilan, "harus pm clear karena masih login akun lain")
 cek(("adb", "shell pm grant id.co.santamaria.app android.permission.POST_NOTIFICATIONS") in SIM.panggilan
     and ("klik", "Izinkan") not in SIM.panggilan, "izin notifikasi harus diberikan lewat adb, tanpa dialog")
 cek(any("SYSTEM_ALERT_WINDOW" in x.get("appops", []) for x in r["izin_otomatis"]), f"app-ops: {r['izin_otomatis']}")
 cek(SIM.login_sebagai == "dummy.owner@contoh.test", "harus login sebagai owner")
 cek(r["langkah"][0]["startup"] == {"total_time_ms": 812, "launch_state": "COLD"}, "startup harus terbaca")
-masuk = r["langkah"][3]
+masuk = r["langkah"][3]  # login_owner_tekan_masuk
 cek(450 <= masuk["respon_ms"] <= 2500, f"respon login harus sekitar 0,5 detik: {masuk['respon_ms']}")
 cek(r["rekaman"] == "rekaman.mp4" and (Path(h["folder"]) / "rekaman.mp4").exists(), "rekaman harus tersimpan")
 cek(any(e["label"] == "Item 6" for e in r["layar_akhir"]), "layar akhir harus versi beranda yang sudah digulir")
@@ -251,5 +253,124 @@ tap = next(l for l in r["langkah"] if l["langkah"] == "aktifkan_mengambang")
 cek(h["status"] == "selesai" and tap.get("keluar_ke_pengaturan") and tap["respon_ms"] < 4000
     and "kondisi tujuan belum diperiksa" in tap["catatan"], f"berhenti cepat: {tap}\n{err[-1500:]}")
 print("15. kondisi + Pengaturan berhenti cepat: OK ->", tap["respon_ms"], "ms")
+
+# ---------------------------------------------------------------- 16. Autostart Xiaomi lewat daftar + Cari, sekali saja
+buka_daftar = [x for x in SIM.panggilan if x[0] == "adb" and "com.miui.securitycenter/" in x[1]]
+cek(("autostart_daftar", "id.co.santamaria.app") in SIM.panggilan and ("autostart_daftar", "id.co.santamaria.wasiat") in SIM.panggilan
+    and ("cari_autostart", "Santa Maria") in SIM.panggilan, "Autostart harus dinyalakan lewat daftar + fitur Cari")
+cek("id.co.santamaria.yayasan" not in SIM.autostart, "baris 'Yayasan Sosial Santa Maria' tidak boleh ikut dinyalakan")
+cek(len(buka_daftar) == 2, f"daftar Autostart hanya dibuka sekali per aplikasi (cache): {len(buka_daftar)}")
+cek(not any(x[0] == "adb" and "APPLICATION_DETAILS_SETTINGS" in x[1] for x in SIM.panggilan), "Info aplikasi tidak perlu dibuka")
+cache = json.loads((Path(TMP) / "autostart.json").read_text(encoding="utf-8"))
+cek(cache["id.co.santamaria.app"]["status"] == "dinyalakan", f"cache autostart: {cache}")
+print("16. Autostart lewat Cari + cache: OK ->", {k: v["status"] for k, v in cache.items()})
+
+# ---------------------------------------------------------------- 17. cadangan: halaman Info aplikasi
+SIM.autostart.discard("id.co.santamaria.app")
+SIM.daftar_autostart_tidak_ada = True
+kode, baris, err = jalankan_cli("siapkan", "--app", "santamaria", "--paksa")
+h = json_terakhir(baris)
+SIM.daftar_autostart_tidak_ada = False
+cek(kode == 0 and h["aplikasi"]["santamaria"]["autostart"] == "dinyalakan"
+    and ("autostart_info", "id.co.santamaria.app") in SIM.panggilan, f"cadangan Info aplikasi: {h}\n{err[-1500:]}")
+cek(SIM.layar == "launcher", "setelah persiapan kembali ke layar utama HP")
+kode, baris, err = jalankan_cli("siapkan")
+h = json_terakhir(baris)
+cek(h["aplikasi"]["yayasan"]["status"] == "tidak_terpasang" and h["aplikasi"]["santamaria"]["autostart"] == "tersimpan",
+    f"siapkan semua: {h}")
+print("17. cadangan Info aplikasi + siapkan semua: OK")
+
+# ---------------------------------------------------------------- 18. sudah dinyalakan manual -> terdeteksi, tidak disentuh
+f_cache = Path(TMP) / "autostart.json"
+data = json.loads(f_cache.read_text(encoding="utf-8"))
+data.pop("id.co.santamaria.app")
+f_cache.write_text(json.dumps(data), encoding="utf-8")
+n_tap = sum(1 for x in SIM.panggilan if x[0] in ("autostart_daftar", "autostart_info") and x[1] == "id.co.santamaria.app")
+kode, baris, err = jalankan_cli("siapkan", "--app", "santamaria")
+h = json_terakhir(baris)
+n_tap2 = sum(1 for x in SIM.panggilan if x[0] in ("autostart_daftar", "autostart_info") and x[1] == "id.co.santamaria.app")
+cek(h["aplikasi"]["santamaria"]["autostart"] == "sudah" and n_tap2 == n_tap, f"harus terdeteksi sudah aktif: {h}")
+print("18. Autostart manual terdeteksi 'sudah': OK")
+
+# ---------------------------------------------------------------- 19. gagal dicatat, tidak dicoba ulang tiap uji
+data = json.loads(f_cache.read_text(encoding="utf-8"))
+data.pop("id.co.santamaria.app")
+f_cache.write_text(json.dumps(data), encoding="utf-8")
+SIM.daftar_autostart_tidak_ada = SIM.info_tanpa_autostart = True
+kode, baris, err = jalankan_cli("siapkan", "--app", "santamaria")
+h = json_terakhir(baris)
+cek(h["aplikasi"]["santamaria"]["autostart"] == "gagal"
+    and json.loads(f_cache.read_text(encoding="utf-8"))["id.co.santamaria.app"]["status"] == "gagal"
+    and any(Path(TMP, "persiapan").glob("autostart_info_*.png")), f"gagal + bukti: {h}")
+n0 = len(SIM.panggilan)
+rencana = {"aplikasi": "santamaria", "judul": "setelah_gagal", "langkah": [{"aksi": "buka_aplikasi", "nama": "buka"}]}
+kode, baris, err = jalankan_cli("jalankan", "-", stdin=json.dumps(rencana))
+cek(json_terakhir(baris)["status"] == "selesai" and not any(
+    x[0] == "adb" and ("APPLICATION_DETAILS" in x[1] or "securitycenter/" in x[1]) for x in SIM.panggilan[n0:]),
+    "uji biasa tidak boleh mencoba Autostart lagi setelah gagal")
+SIM.daftar_autostart_tidak_ada = SIM.info_tanpa_autostart = False
+kode, baris, err = jalankan_cli("siapkan", "--app", "santamaria")
+cek(json_terakhir(baris)["aplikasi"]["santamaria"]["autostart"] == "sudah", "siapkan harus mencoba ulang yang gagal")
+print("19. gagal dicatat + dicoba ulang lewat siapkan: OK")
+
+# ---------------------------------------------------------------- 20. struktur asli HyperOS (XML dari HP POCO)
+class DriverXML:
+    def __init__(self, xml):
+        self.page_source = xml
+
+
+cfg_asli = ag.muat_konfigurasi(os.environ["UJI_UI_AKUN"])
+fix = Path(__file__).resolve().parent / "fixtures"
+pw = ag.Pelaksana(DriverXML((fix / "hyperos_autostart_cari_wasiat.xml").read_text(encoding="utf-8")),
+                  cfg_asli, "wasiat", Path(TMP), {"dpi": 480})
+sw = pw.cari_sakelar_baris(lambda t: t == "Wasiat")
+cek(sw is not None and sw.get("resource-id", "").endswith("sliding_button") and sw.get("checked") == "false",
+    f"Wasiat (HyperOS): {sw.attrib if sw is not None else None}")
+ps = ag.Pelaksana(DriverXML((fix / "hyperos_autostart_cari_santamaria.xml").read_text(encoding="utf-8")),
+                  cfg_asli, "santamaria", Path(TMP), {"dpi": 480})
+s1 = ps.cari_sakelar_baris(lambda t: t == "Santa Maria")
+s2 = ps.cari_sakelar_baris(lambda t: t == "Yayasan Sosial Santa Maria")
+cek(s1 is not None and s1.get("checked") == "true" and s1.get("bounds") == "[981,359][1133,458]",
+    f"Santa Maria harus terbaca menyala di baris pertama: {s1.attrib if s1 is not None else None}")
+cek(s2 is not None and s2.get("checked") == "false" and s2.get("bounds") == "[981,551][1133,650]",
+    f"Yayasan Sosial Santa Maria harus terbaca mati di baris kedua: {s2.attrib if s2 is not None else None}")
+print("20. XML asli HyperOS: OK -> Santa Maria menyala, Yayasan & Wasiat mati, tombol geser terpilih")
+
+# ---------------------------------------------------------------- 21. sambungan adb: galat adb bukan "tidak terpasang"
+SIM.perangkat = []  # kabel lepas / USB debugging mati: adb menulis "no devices/emulators found" di stderr
+kode, baris, err = jalankan_cli("siapkan", "--paksa")
+h = json_terakhir(baris)
+cek(kode == 2 and "tidak terdeteksi" in h["pesan"] and "tidak terpasang" not in err,
+    f"HP tidak tersambung harus dilaporkan jelas, bukan 'tidak terpasang': {h}\n{err[-600:]}")
+cek(ag.info_perangkat(simulator.PKG)["model"] == "", "pesan galat adb tidak boleh terbaca sebagai nama model HP")
+SIM.perangkat = [("SIM0001", "unauthorized")]
+h = json_terakhir(jalankan_cli("siapkan")[1])
+cek("unauthorized" in h.get("pesan", "") and "Izinkan" in h["pesan"], f"unauthorized: {h}")
+SIM.perangkat, SIM.pulih_setelah_reconnect = [("SIM0001", "offline")], True
+kode, baris, err = jalankan_cli("siapkan", "--app", "santamaria")
+cek(kode == 0 and json_terakhir(baris)["aplikasi"]["santamaria"]["status"] == "ok"
+    and ("adb", "reconnect offline") in SIM.panggilan, f"offline dipulihkan lewat reconnect: {baris[-1:]}\n{err[-600:]}")
+SIM.pulih_setelah_reconnect = False
+SIM.perangkat = [("SIM0001", "device"), ("adb-SIM0001-xY._adb-tls-connect._tcp", "device")]
+kode, baris, err = jalankan_cli("siapkan", "--app", "santamaria")
+cek(kode == 0 and json_terakhir(baris)["aplikasi"]["santamaria"]["status"] == "ok" and ag.SERIAL_AKTIF == "SIM0001"
+    and os.environ.get("ANDROID_SERIAL") == "SIM0001" and SIM.udid_terakhir == "SIM0001",
+    f"HP lewat USB dipilih walau juga tersambung lewat Wi-Fi: {err[-600:]}")
+SIM.perangkat = [("SIM0001", "device"), ("SIM0002", "device")]
+h = json_terakhir(jalankan_cli("siapkan")[1])
+cek("SIM0001" in h.get("pesan", "") and "serial" in h["pesan"], f"dua HP USB harus minta serial: {h}")
+cfg_dua = ag.muat_konfigurasi(os.environ["UJI_UI_AKUN"])
+cfg_dua.setdefault("hp", {})["serial"] = "SIM0002"
+cek(ag.pastikan_hp(cfg_dua) == "SIM0002", "serial dari aplikasi.json dipakai")
+SIM.perangkat = [("SIM0001", "device")]
+SIM.adb_tidak_ada = True
+h = json_terakhir(jalankan_cli("siapkan")[1])
+SIM.adb_tidak_ada = False
+cek("Platform-Tools" in h.get("pesan", ""), f"adb tidak ada: {h}")
+kode, baris, err = jalankan_cli("siapkan")
+h = json_terakhir(baris)
+cek(h["aplikasi"]["yayasan"]["status"] == "tidak_terpasang" and h["aplikasi"]["wasiat"]["status"] == "ok"
+    and "id.co.santamaria.yayasan tidak terpasang" in err, f"HP tersambung: hanya yang benar-benar belum dipasang: {h}")
+print("21. sambungan adb: OK -> kosong / unauthorized / offline / USB+Wi-Fi / dua HP / adb tidak ada")
 
 print(f"\nSEMUA {lulus} CEK LULUS (hasil uji di {TMP})")

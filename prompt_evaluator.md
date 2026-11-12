@@ -24,6 +24,8 @@ ulang yang spesifik oleh LLM Perancang.
   "keluar_ke_pengaturan" berarti aplikasi membawa pengguna ke layar sistem di luar aplikasi (Pengaturan/dialog
   izin); langkah "izinkan_di_pengaturan_*" dilakukan skrip, bukan bagian aplikasi. Nilai hal ini sebagai temuan UX
   (pengguna dipaksa keluar aplikasi, apakah ada penjelasan sebelumnya, apakah fitur bisa dipakai tanpa izin itu).
+- CAKUPAN ELEMEN: berapa elemen yang bisa diklik (di layar aplikasi yang sudah dikenal) sudah pernah diketuk.
+  Pakai untuk menilai cakupan dan "belum_diuji"; elemen berisiko memang sengaja tidak diketuk.
 - EVALUASI SEBELUMNYA (kalau ada): perbarui dan lengkapi, jangan mulai dari nol. Kembalikan daftar temuan
   LENGKAP (lama yang masih berlaku + baru), bukan hanya yang baru.
 

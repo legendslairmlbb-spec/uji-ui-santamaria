@@ -1,0 +1,65 @@
+{
+  "_catatan": "Pengaturan perilaku per aplikasi (bukan rahasia, ikut repo). Digabung ke akun.json saat dimuat; kalau kunci yang sama ada di akun.json, nilai di akun.json yang dipakai. label_hp = nama aplikasi persis seperti di HP (dipakai untuk daftar Autostart Xiaomi). gerbang_izin = langkah otomatis saat aplikasi menahan pengguna di halaman izinnya sendiri; dijalankan setelah buka aplikasi/login, hanya kalau elemen 'tanda' terlihat, dan langkah yang elemennya tidak ada dilewati.",
+  "hp": {
+    "_catatan": "Opsional. serial = serial HP uji dari 'adb devices', hanya perlu kalau lebih dari satu HP/emulator tersambung (kosong = HP satu-satunya, atau yang lewat USB). komponen_autostart = komponen halaman daftar Autostart di HP ini (paket/aktivitas); cara mencarinya: buka halaman 'Mulai otomatis di latar belakang' di HP, lalu jalankan: adb shell dumpsys window | findstr mCurrentFocus. Kosong = coba komponen MIUI yang umum.",
+    "serial": "",
+    "komponen_autostart": ""
+  },
+  "aplikasi": {
+    "santamaria": {
+      "label_hp": "Santa Maria",
+      "gerbang_izin": {
+        "tanda": {
+          "label": "Izin aplikasi"
+        },
+        "langkah": [
+          {
+            "aksi": "tap",
+            "nama": "gerbang_buka_autostart",
+            "target": {
+              "label_mengandung": "Aktifkan Autostart"
+            },
+            "tunggu_muncul": {
+              "label_mengandung": "Saya sudah mengaktifkan"
+            },
+            "catatan": "membuka petunjuk Autostart di aplikasi"
+          },
+          {
+            "aksi": "tap",
+            "nama": "gerbang_centang_autostart",
+            "target": {
+              "label_mengandung": "Saya sudah mengaktifkan"
+            },
+            "catatan": "mencentang konfirmasi; Autostart sudah dinyalakan skrip di Pengaturan HP"
+          },
+          {
+            "aksi": "tap",
+            "nama": "gerbang_sudah_aktif",
+            "target": {
+              "label": "Sudah aktif"
+            },
+            "tunggu_hilang": {
+              "label": "Sudah aktif"
+            }
+          },
+          {
+            "aksi": "tap",
+            "nama": "gerbang_periksa_ulang",
+            "target": {
+              "label": "Periksa ulang"
+            },
+            "tunggu_hilang": {
+              "label": "Izin aplikasi"
+            }
+          }
+        ]
+      }
+    },
+    "yayasan": {
+      "label_hp": "Yayasan Sosial Santa Maria"
+    },
+    "wasiat": {
+      "label_hp": "Wasiat"
+    }
+  }
+}

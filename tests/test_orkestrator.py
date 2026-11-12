@@ -61,7 +61,7 @@ print("2. daftar-skenario: OK ->", [(s["no"], s["aplikasi"], s["peran"]) for s i
 
 # ---------------------------------------------------------------- 3. siklus penuh (owner): 2 putaran
 n0 = len(ST.permintaan)
-kode, h, err = cli("siklus", "--app", "santamaria", "--peran", "owner")
+kode, h, err = cli("siklus", "--app", "santamaria", "--peran", "owner", "--tanpa-jelajah", "--maks-putaran", "3")
 cek(kode == 0 and h["status"] == "ok", f"siklus: {h}\n{err[-3000:]}")
 sesi = Path(h["sesi"])
 data = json.loads((sesi / "sesi.json").read_text(encoding="utf-8"))
@@ -198,5 +198,27 @@ cek(kode == 0 and h["putaran"] == 1, f"rancang wasiat: {h}\n{err[-1500:]}")
 teks_req = json.dumps([r["body"] for r in ST.permintaan[n0:]], ensure_ascii=False)
 cek(len(ST.permintaan) > n0 and "@gmail.com" not in teks_req and "Beranda Wasiat" in teks_req, "isi permintaan wasiat")
 print("10. Wasiat SSO di orkestrator: OK ->", sso)
+
+# ---------------------------------------------------------------- 11. mode jelajah menyeluruh
+n0 = len(ST.permintaan)
+kode, h, err = cli("siklus", "--app", "santamaria", "--peran", "owner", "--jelajah", "--maks-putaran", "3", "--tanpa-rekam")
+cek(kode == 0, f"siklus jelajah: {h}\n{err[-2000:]}")
+sj = Path(h["sesi"])
+dj = json.loads((sj / "sesi.json").read_text(encoding="utf-8"))
+cek(len(dj["putaran"]) == 3, f"jelajah: harus 3 putaran, dapat {len(dj['putaran'])}")
+p2 = dj["putaran"][1]
+cek(p2["lanjut"] is True and "mode jelajah menyeluruh" in p2["alasan_keputusan"] and p2["keyakinan"] >= 0.75,
+    f"putaran 2 harus lanjut karena masih ada elemen belum dijelajah walau evaluator yakin: {p2}")
+cek("putaran maksimal (3)" in dj["putaran"][2]["alasan_keputusan"], f"putaran 3: {dj['putaran'][2]}")
+pr = [r["body"] for r in ST.permintaan[n0:] if "LLM PERANCANG UJI" in json.dumps(r["body"]["messages"][0])]
+cek("ELEMEN BELUM DIJELAJAH - mode jelajah menyeluruh AKTIF" in pr[-1]["messages"][1]["content"][0]["text"],
+    "perancang harus menerima daftar elemen yang belum dijelajah")
+lj = json.loads((sj / "laporan.json").read_text(encoding="utf-8"))
+ce = lj["cakupan_elemen"]
+cek(ce["total"] > 0 and ce["sudah"] >= 1 and all(x["label"] != "Keluar" for x in ce["belum"])
+    and not any(x["label"] in ("Masuk", "Konsumen", "Periksa ulang") for x in ce["belum"]),
+    f"cakupan elemen (tanpa tombol berisiko, form login, gerbang izin): {ce}")
+cek("Elemen yang bisa diklik:" in (sj / "laporan.md").read_text(encoding="utf-8"), "cakupan di laporan")
+print(f"11. jelajah menyeluruh: OK -> cakupan {ce['sudah']}/{ce['total']}, belum: {[x['label'] for x in ce['belum']][:6]}")
 
 print(f"\nSEMUA {lulus} CEK LULUS (hasil di {TMP})")

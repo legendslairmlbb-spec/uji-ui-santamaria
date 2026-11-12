@@ -39,6 +39,7 @@ from pathlib import Path
 APPIUM_URL = os.environ.get("APPIUM_URL", "http://127.0.0.1:4723")
 FOLDER_DASAR = Path(os.environ.get("UJI_UI_FOLDER") or Path.home() / ".n8n-files" / "uji-ui")
 FILE_AKUN = Path(os.environ.get("UJI_UI_AKUN") or Path(__file__).resolve().with_name("akun.json"))
+FILE_APLIKASI = Path(os.environ.get("UJI_UI_APLIKASI") or Path(__file__).resolve().with_name("aplikasi.json"))
 MIN_TARGET_DP = 48          # pedoman Android: area sentuh minimal 48 x 48 dp
 MAKS_LANGKAH = 40
 UIA = "-android uiautomator"  # = AppiumBy.ANDROID_UIAUTOMATOR
@@ -58,9 +59,16 @@ POLA_DIALOG_IZIN = 'packageNameMatches(".*(permissioncontroller|packageinstaller
 POLA_PENGATURAN = re.compile(r"settings|securitycenter|permissioncontroller|permissionmanager|safecenter|"
                              r"packageinstaller|devicecare|powerkeeper|\.lool", re.I)
 POLA_IZINKAN = re.compile(r"izinkan|allow|aktifkan|enable|permit|notifikasi|notification|sepanjang waktu|all the time|"
+                          r"mulai otomatis|autostart|auto-start|"
                           r"di atas aplikasi lain|over other apps|semua file|all files|akses|access|tanpa batasan|"
                           r"no restrictions|unrestricted", re.I)
 POLA_TOLAK = re.compile(r"\b(jangan|tolak|deny|don't|do not|nonaktifkan|disable|batasi|restricted|hapus|delete)\b", re.I)
+# Autostart Xiaomi/Redmi/POCO: izin khusus MIUI/HyperOS, tidak bisa lewat adb -> dinyalakan lewat tampilan.
+MEREK_XIAOMI = ("xiaomi", "redmi", "poco")
+POLA_AUTOSTART = re.compile(r"mulai otomatis|mulai sendiri|jalankan otomatis|autostart|auto-start|auto start", re.I)
+KOMPONEN_AUTOSTART = ("com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity",
+                      "com.miui.securitycenter/com.miui.powercenter.autostart.AutoStartManagementActivity")
+FILE_AUTOSTART = FOLDER_DASAR / "autostart.json"
 # Izin khusus yang tidak bisa diberikan dengan 'pm grant'; diberikan lewat app-ops.
 IZIN_APPOPS = {
     "android.permission.SYSTEM_ALERT_WINDOW": "SYSTEM_ALERT_WINDOW",
@@ -108,22 +116,155 @@ def _slug(teks, maks=60):
 
 
 # ====================================================================== adb & perangkat
-def adb(*args, timeout=60):
-    """Jalankan perintah adb dan kembalikan output-nya ('' kalau gagal)."""
+def cari_adb():
+    """Pakai adb yang sama dengan Appium (ANDROID_HOME / ANDROID_SDK_ROOT\\platform-tools). Dua versi adb yang berbeda
+    saling mematikan server adb, sehingga HP sesaat 'hilang'. Kalau tidak ada, pakai adb dari PATH."""
+    if os.environ.get("ADB"):
+        return os.environ["ADB"]
+    for var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        akar = os.environ.get(var)
+        for nama in (("adb.exe", "adb") if akar else ()):
+            p = Path(akar) / "platform-tools" / nama
+            if p.is_file():
+                return str(p)
+    return "adb"
+
+
+ADB = cari_adb()
+SERIAL_PENGGUNA = (os.environ.get("ANDROID_SERIAL") or "").strip()  # HP yang dipilih pengguna sendiri, kalau ada
+SERIAL_AKTIF = None  # HP yang sedang dipakai (diisi pastikan_hp, dipakai juga oleh Appium)
+JEDA_CEK_HP = 2.0    # detik antar-percobaan membaca 'adb devices'
+
+
+def _adb_mentah(args, timeout=60):
+    """Jalankan adb -> (kode_keluar, stdout, stderr). Kode None = adb tidak bisa dijalankan sama sekali."""
     try:
-        r = subprocess.run(["adb", *args], capture_output=True, text=True,
+        r = subprocess.run([ADB, *args], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout)
-        return (r.stdout or "") + (r.stderr or "")
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return r.returncode, r.stdout or "", r.stderr or ""
+    except OSError as e:
+        return None, "", str(e)
+    except subprocess.TimeoutExpired:
+        return None, "", f"adb tidak menjawab dalam {timeout} detik"
+
+
+def adb(*args, timeout=60):
+    """Jalankan perintah adb, kembalikan stdout+stderr ('' kalau adb tidak bisa dijalankan).
+    Untuk aksi yang keluarannya dicek polanya (am start, pm grant, ...)."""
+    kode, out, err = _adb_mentah(args, timeout)
+    return "" if kode is None else out + err
+
+
+def adb_baca(*args, timeout=60):
+    """Untuk MEMBACA nilai (getprop, dumpsys, pm path): hanya stdout, dan '' kalau perintahnya gagal.
+    Pesan error adb seperti 'no devices/emulators found' tidak boleh terbaca sebagai nilai."""
+    kode, out, _ = _adb_mentah(args, timeout)
+    return out if kode == 0 else ""
+
+
+def daftar_hp():
+    """Isi 'adb devices' sebagai [(serial, status)], atau None kalau adb tidak bisa dijalankan."""
+    kode, out, _ = _adb_mentah(["devices"], 30)
+    if kode is None:
+        return None
+    hasil = []
+    for baris in out.splitlines():
+        baris = baris.strip()
+        if not baris or baris.startswith(("*", "List of devices")):
+            continue
+        m = re.match(r"(\S+)\s+(.+)$", baris)
+        if m:
+            hasil.append((m.group(1), m.group(2).strip()))
+    return hasil
+
+
+def _serial_usb(serial):
+    """HP lewat kabel USB, bukan emulator / adb Wi-Fi ('ip:port' atau '..._adb-tls-connect._tcp')."""
+    return not (serial.startswith("emulator-") or ":" in serial or "._adb-tls" in serial)
+
+
+SARAN_HP = {
+    "kosong": ("HP tidak terdeteksi oleh adb (daftar 'adb devices' kosong). Cek: kabel USB tersambung (kabel data, "
+               "bukan kabel cas saja), layar HP tidak terkunci, dan 'USB debugging' di Opsi pengembang masih aktif "
+               "(HP Xiaomi bisa mematikannya sendiri setelah restart atau update)"),
+    "unauthorized": ("HP terhubung tapi adb belum diizinkan (status 'unauthorized'). Buka kunci HP lalu ketuk 'Izinkan' "
+                     "di dialog 'Izinkan USB debugging?' (centang 'Selalu izinkan dari komputer ini'). Kalau dialognya "
+                     "tidak muncul: cabut-pasang kabel USB, atau di Opsi pengembang ketuk 'Cabut otorisasi USB "
+                     "debugging' lalu colok ulang"),
+    "offline": ("HP terdeteksi tapi 'offline'. Cabut-pasang kabel USB; kalau masih offline, jalankan 'adb kill-server' "
+                "lalu coba lagi"),
+}
+
+
+def pastikan_hp(cfg=None, coba=4, jeda=None):
+    """Pastikan ada tepat satu HP yang siap dipakai lewat adb, SEBELUM memeriksa aplikasi atau membuka Appium.
+    HP terpilih dipasang di ANDROID_SERIAL (dipakai semua perintah adb berikutnya) dan dikirim ke Appium sebagai udid.
+    Melempar Gagal berisi penyebab + cara memperbaikinya kalau HP belum siap."""
+    global SERIAL_AKTIF
+    jeda = JEDA_CEK_HP if jeda is None else jeda
+    pilihan = SERIAL_PENGGUNA or str(((cfg or {}).get("hp") or {}).get("serial") or "").strip()
+    hp = []
+    for i in range(coba):
+        hp = daftar_hp()
+        if hp is None:
+            raise Gagal(f"adb tidak bisa dijalankan ({ADB}). Pasang Android SDK Platform-Tools dan pastikan adb ada "
+                        "di PATH, atau ANDROID_HOME sudah diatur")
+        calon = [h for h in hp if h[0] == pilihan] if pilihan else hp
+        if any(st == "device" for _, st in calon):
+            break
+        if any(st == "offline" for _, st in calon):
+            _adb_mentah(["reconnect", "offline"], 30)
+        if i < coba - 1:
+            time.sleep(jeda)  # server adb yang baru menyala butuh beberapa detik untuk mengenali HP
+    terlihat = ", ".join(f"{s} ({st})" for s, st in hp) or "tidak ada"
+    if pilihan:
+        if not any(s == pilihan for s, _ in hp):
+            raise Gagal(f"HP dengan serial {pilihan} (dari ANDROID_SERIAL / \"serial\" di aplikasi.json) tidak "
+                        f"terhubung; yang terdeteksi adb: {terlihat}")
+        hp = [h for h in hp if h[0] == pilihan]
+    siap = [s for s, st in hp if st == "device"]
+    if not siap:
+        status = {st for _, st in hp}
+        for kunci in ("unauthorized", "offline"):
+            if kunci in status:
+                raise Gagal(SARAN_HP[kunci])
+        if hp:
+            raise Gagal(f"HP terdeteksi tapi statusnya belum 'device' ({terlihat}). Nyalakan ulang HP secara normal "
+                        "lalu colok ulang")
+        raise Gagal(SARAN_HP["kosong"])
+    if len(siap) > 1:
+        usb = [s for s in siap if _serial_usb(s)]
+        if len(usb) != 1:
+            raise Gagal(f"ada {len(siap)} perangkat terhubung ke adb ({terlihat}). Cabut yang tidak dipakai, atau isi "
+                        "\"serial\" di bagian \"hp\" pada aplikasi.json dengan serial HP uji")
+        log(f"Beberapa perangkat terhubung ({terlihat}); memakai HP lewat USB: {usb[0]}")
+        siap = usb
+    SERIAL_AKTIF = siap[0]
+    os.environ["ANDROID_SERIAL"] = SERIAL_AKTIF
+    return SERIAL_AKTIF
+
+
+POLA_GALAT_ADB = re.compile(r"(?m)^(adb(\.exe)?: |error: )")  # galat dari adb sendiri, bukan dari perintah di HP
+
+
+def aplikasi_terpasang(package):
+    """Cek lewat 'pm path'. Kalau adb sendiri yang gagal (HP terputus), lempar Gagal: jangan dianggap tidak terpasang."""
+    kode, out, err = _adb_mentah(["shell", "pm", "path", package], 60)
+    if "package:" in out:
+        return True
+    if kode is None or POLA_GALAT_ADB.search(err):
+        galat = (err.strip().splitlines() or ["adb tidak menjawab"])[0]
+        raise Gagal(f"sambungan adb ke HP terputus saat memeriksa {package} ({galat}). Cek kabel USB dan buka kunci "
+                    "layar HP, lalu jalankan lagi")
+    return False
 
 
 def info_perangkat(package):
     def prop(nama):
-        return adb("shell", "getprop", nama).strip()
+        return adb_baca("shell", "getprop", nama).strip()
 
-    dpi = re.findall(r"density:\s*(\d+)", adb("shell", "wm", "density"))  # override (kalau ada) di akhir
-    versi = re.search(r"versionName=(\S+)", adb("shell", "dumpsys", "package", package))
+    dpi = re.findall(r"density:\s*(\d+)", adb_baca("shell", "wm", "density"))  # override (kalau ada) di akhir
+    versi = re.search(r"versionName=(\S+)", adb_baca("shell", "dumpsys", "package", package))
     return {
         "merek": prop("ro.product.manufacturer"),
         "model": prop("ro.product.model"),
@@ -136,7 +277,7 @@ def info_perangkat(package):
 def beri_izin_adb(package):
     """Berikan semua izin runtime yang diminta aplikasi + izin khusus (app-ops, baterai) lewat adb, tanpa UI.
     Supaya uji tidak tersangkut di dialog/Pengaturan izin. Dipanggil di awal uji dan setelah 'pm clear'."""
-    out = adb("shell", "dumpsys", "package", package)
+    out = adb_baca("shell", "dumpsys", "package", package)
     disebut = set(re.findall(r"([\w.]+\.permission\.[A-Z0-9_]+)", out))
     belum = list(dict.fromkeys(re.findall(r"([\w.]+\.permission\.[A-Z0-9_]+): granted=false", out)))
     belum.sort(key=lambda x: "BACKGROUND" in x)  # lokasi latar belakang hanya bisa setelah lokasi biasa
@@ -165,6 +306,27 @@ def beri_izin_adb(package):
         log("  izin yang gagal diberikan:", ", ".join(hasil["gagal"]),
             "(HP Xiaomi/Redmi/POCO: aktifkan 'USB debugging (Security settings)' di Opsi pengembang)")
     return hasil
+
+
+def hp_xiaomi(info):
+    return (info.get("merek") or "").strip().lower() in MEREK_XIAOMI
+
+
+def baca_autostart():
+    try:
+        return json.loads(FILE_AUTOSTART.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def catat_autostart(package, status):
+    data = baca_autostart()
+    data[package] = {"status": status, "waktu": datetime.now().isoformat(timespec="seconds")}
+    try:
+        FILE_AUTOSTART.parent.mkdir(parents=True, exist_ok=True)
+        FILE_AUTOSTART.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        log("  status autostart tidak bisa disimpan:", e)
 
 
 def baca_status_login():
@@ -199,7 +361,7 @@ def nilai_rahasia(cfg):
 
 def baca_skala_font():
     try:
-        return float(adb("shell", "settings", "get", "system", "font_scale").strip())
+        return float(adb_baca("shell", "settings", "get", "system", "font_scale").strip())
     except ValueError:
         return 1.0
 
@@ -342,6 +504,27 @@ def daftar_elemen(xml, density=None, maks=80, kotak=False):
     return hasil
 
 
+def sakelar_terluar(node):
+    """Elemen checkable terluar di dalam node. Baris HyperOS adalah Switch yang berisi Switch lagi (tombol geser);
+    keduanya dihitung satu sakelar."""
+    hasil = []
+
+    def jalan(el):
+        if el.get("checkable") == "true" and _bounds(el.get("bounds")):
+            hasil.append(el)
+            return
+        for anak in el:
+            jalan(anak)
+    jalan(node)
+    return hasil
+
+
+def tombol_sakelar(s):
+    """Elemen yang diketuk untuk sakelar s: tombol geser di dalamnya kalau ada satu, selain itu s sendiri."""
+    dalam = [x for x in s.iter() if x is not s and x.get("checkable") == "true" and _bounds(x.get("bounds"))]
+    return dalam[0] if len(dalam) == 1 else s
+
+
 def elemen_di_titik(xml, x, y):
     """Label elemen terdalam yang bisa diklik dan memuat titik (x, y)."""
     terbaik = None
@@ -476,6 +659,7 @@ class Pelaksana:
         self.pkg = self.app["package"]
         self.folder = folder
         self.density = info["dpi"] / 160 if info.get("dpi") else None
+        self.info = info
         self.izinkan_berisiko = izinkan_berisiko
         self.langkah = []
         self.peran_aktif = None
@@ -485,6 +669,8 @@ class Pelaksana:
         self.rencana_ke = None
         self.skala_font_awal = None
         self.sso = self.app.get("login_metode") == "google_sso"
+        self.di_gerbang = False
+        self.berikutnya = None  # langkah rencana sesudah langkah yang sedang berjalan
         self.beri_izin = self.app.get("beri_izin_otomatis", True)
         self.izin_otomatis = []  # catatan pemberian izin lewat adb selama uji
 
@@ -600,7 +786,7 @@ class Pelaksana:
             node = el
             for _ in range(4):
                 isi = [t for t in (teks(x) for x in node.iter()) if t]
-                n_cek = sum(1 for x in node.iter() if x.get("checkable") == "true")
+                n_cek = len(sakelar_terluar(node))
                 if isi and n_cek <= 1:
                     return " ".join(isi)[:200]
                 if n_cek > 1 and node is not el:
@@ -609,6 +795,16 @@ class Pelaksana:
                 if node is None:
                     break
             return teks(el)
+
+        def baris_berisi(el, label):  # baris yang punya teks persis sama dengan label (bukan sekadar memuat)
+            node = el
+            for _ in range(4):
+                node = induk.get(node)
+                if node is None or len(sakelar_terluar(node)) > 1:
+                    return False
+                if any(teks(x) == label for x in node.iter()):
+                    return True
+            return False
 
         kandidat = [el for el in root.iter() if el.get("checkable") == "true" and el.get("checked") == "false"
                     and el.get("enabled") != "false" and _bounds(el.get("bounds"))]
@@ -621,8 +817,10 @@ class Pelaksana:
                 break
         if pilih is None:
             sakelar = [el for el in kandidat if el not in radio]
+            label_app = self.app.get("label_hp") or self.app.get("nama")
+            milik_app = [el for el in sakelar if label_app and baris_berisi(el, label_app)]  # mis. daftar Autostart
             cocok = [el for el in sakelar if POLA_IZINKAN.search(teks_baris(el)) and not POLA_TOLAK.search(teks_baris(el))]
-            pilih = cocok[0] if cocok else (sakelar[0] if len(sakelar) == 1 else None)
+            pilih = (milik_app + cocok)[0] if (milik_app or cocok) else (sakelar[0] if len(sakelar) == 1 else None)
         if pilih is None:
             return None
         label = teks_baris(pilih)[:120] or (pilih.get("class") or "sakelar")
@@ -640,6 +838,167 @@ class Pelaksana:
                 time.sleep(0.8)
                 break
         return label
+
+    def cari_sakelar_baris(self, cocok):
+        """Sakelar (elemen checkable) pada baris yang teksnya cocok, di layar saat ini. None kalau tidak ada."""
+        root = _root(self.d.page_source)
+        induk = {anak: p for p in root.iter() for anak in p}
+        for el in root.iter():
+            t = (el.get("text") or el.get("content-desc") or "").strip()
+            if not t or not cocok(t) or "EditText" in (el.get("class") or ""):
+                continue
+            node = el
+            for _ in range(5):
+                cek = sakelar_terluar(node)
+                if len(cek) == 1:
+                    return tombol_sakelar(cek[0])
+                if len(cek) > 1:
+                    break
+                node = induk.get(node)
+                if node is None:
+                    break
+        return None
+
+    def nyalakan_sakelar_baris(self, cocok, maks_gulir=4):
+        """Cari baris (gulir kalau perlu) lalu nyalakan sakelarnya. 'sudah' / 'dinyalakan' / None."""
+        for _ in range(maks_gulir + 1):
+            sakelar = self.cari_sakelar_baris(cocok)
+            if sakelar is not None:
+                if sakelar.get("checked") == "true":
+                    return "sudah"
+                b = _bounds(sakelar.get("bounds"))
+                self.d.tap([((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)])
+                time.sleep(1.0)
+                lagi = self.cari_sakelar_baris(cocok)
+                return "dinyalakan" if lagi is not None and lagi.get("checked") == "true" else None
+            try:
+                self.gulir("bawah", 1)
+            except Exception:
+                return None
+            time.sleep(0.6)
+        return None
+
+    def cari_di_daftar(self, label):
+        """Di halaman daftar (mis. Autostart): ketuk ikon Cari lalu ketik label, supaya tidak perlu menggulir."""
+        pemilih = ('new UiSelector().descriptionMatches("(?i)(cari|search|telusuri).*")',
+                   'new UiSelector().resourceIdMatches("(?i).*search.*")',
+                   'new UiSelector().textMatches("(?i)(cari|search|telusuri).*")')
+        for sel in pemilih:
+            try:
+                el = self.d.find_elements(UIA, sel)
+            except Exception:
+                el = []
+            if el:
+                el[0].click()
+                break
+        else:
+            return False
+        if not self.tunggu(lambda: self.jumlah('className("android.widget.EditText")') > 0, 4):
+            return False
+        kolom = self.d.find_elements(UIA, 'new UiSelector().className("android.widget.EditText")')[0]
+        try:
+            kolom.click()
+            kolom.clear()
+        except Exception:
+            pass
+        kolom.send_keys(label)
+        time.sleep(1.0)
+        # Keyboard sengaja TIDAK ditutup: di MIUI/HyperOS menutup keyboard (Back) ikut keluar dari mode Cari
+        # sehingga hasil pencarian hilang. Baris hasil Cari tetap terlihat di atas keyboard.
+        return True
+
+    def aktifkan_autostart(self, paksa=False):
+        """HP Xiaomi/Redmi/POCO: nyalakan 'Mulai otomatis' (Autostart) aplikasi lewat tampilan Pengaturan.
+        None = tidak berlaku; 'tersimpan'/'sudah'/'dinyalakan' = aktif; 'gagal' = perlu manual.
+        Status apa pun (termasuk gagal) disimpan di autostart.json supaya tidak dicoba ulang setiap uji."""
+        if not hp_xiaomi(self.info) or not self.app.get("autostart", True):
+            return None
+        tersimpan = (baca_autostart().get(self.pkg) or {}).get("status")
+        if tersimpan and not paksa:
+            return "tersimpan" if tersimpan != "gagal" else "gagal"
+        label = self.app.get("label_hp") or self.app.get("nama")
+        hasil = None
+        slug = _slug(self.pkg)
+        try:  # hasil Cari di MIUI/HyperOS bisa berada di jendela lain; baca semua jendela selama pemeriksaan ini
+            self.d.update_settings({"enableMultiWindows": True})
+        except Exception:
+            pass
+        komponen_hp = (self.cfg.get("hp") or {}).get("komponen_autostart")
+        if label:  # jalur 1: daftar Autostart di aplikasi Keamanan + fitur Cari
+            for komponen in ([komponen_hp] if komponen_hp else []) + list(KOMPONEN_AUTOSTART):
+                out = adb("shell", "am", "start", "-n", komponen)
+                if re.search(r"Error|Exception|does not exist|Permission Denial", out):
+                    log(f"  daftar Autostart {komponen} tidak bisa dibuka: {out.strip().splitlines()[-1][:160] if out.strip() else '-'}")
+                    continue
+                log(f"  memeriksa Autostart '{label}' di daftar Autostart ({komponen}) pakai Cari ...")
+                if not self.tunggu(lambda: (self.paket_aktif() or "") != self.pkg and self.jumlah(
+                        'checkable(true)') > 0, 6):
+                    self.ambil(f"autostart_daftar_{slug}")
+                    log("  halaman daftar Autostart tidak terbaca (tidak ada sakelar)")
+                    continue
+                if self.cari_di_daftar(label):
+                    cocok = None
+                    for c in (lambda t: t == label, lambda t: t.startswith(label)):
+                        if self.tunggu(lambda: self.cari_sakelar_baris(c) is not None, 4):
+                            cocok = c
+                            break
+                    if cocok is not None:
+                        hasil = self.nyalakan_sakelar_baris(cocok, maks_gulir=0)
+                    else:
+                        log(f"  baris '{label}' terlihat? sakelarnya tidak terbaca di hasil Cari "
+                            "(screenshot + XML disimpan di folder persiapan)")
+                else:  # tidak ada fitur Cari: gulir
+                    log("  ikon Cari tidak ditemukan; mencari dengan menggulir")
+                    hasil = self.nyalakan_sakelar_baris(lambda t: t == label, maks_gulir=15)
+                if hasil:
+                    break
+                self.ambil(f"autostart_daftar_{slug}")
+        if hasil is None:  # jalur 2: halaman Info aplikasi
+            log(f"  memeriksa Autostart {self.pkg} di halaman Info aplikasi ...")
+            adb("shell", "am", "start", "-a", "android.settings.APPLICATION_DETAILS_SETTINGS", "-d", f"package:{self.pkg}")
+            time.sleep(2.0)
+            hasil = self.nyalakan_sakelar_baris(lambda t: len(t) <= 40 and POLA_AUTOSTART.search(t) is not None,
+                                                maks_gulir=2)
+            if hasil is None:
+                self.ambil(f"autostart_info_{slug}")  # bukti untuk diperiksa (screenshot + XML)
+        try:
+            self.d.update_settings({"enableMultiWindows": False})
+        except Exception:
+            pass
+        adb("shell", "input", "keyevent", "KEYCODE_HOME")
+        time.sleep(0.5)
+        catat_autostart(self.pkg, hasil or "gagal")
+        if hasil:
+            log(f"  Autostart {self.pkg}: {hasil}")
+            return hasil
+        log(f"  Autostart {self.pkg} belum bisa dinyalakan/diperiksa otomatis (tidak dicoba lagi sampai "
+            f"'python agen_uji.py siapkan --paksa'). Nyalakan manual lewat Pengaturan > Aplikasi > Izin > Autostart, "
+            f"atau cek 'label_hp' di aplikasi.json. Screenshot halaman terakhir: {self.folder}")
+        return "gagal"
+
+    def lewati_gerbang(self):
+        """Halaman izin di DALAM aplikasi (misalnya konfirmasi Autostart): jalankan langkah gerbang_izin."""
+        g = self.app.get("gerbang_izin")
+        if not g or self.di_gerbang or not g.get("tanda"):
+            return True
+        if not self.tunggu(lambda: self.ada(g["tanda"]), float(g.get("tunggu_detik", 2))):
+            return True
+        log("  halaman izin aplikasi terdeteksi; menjalankan langkah gerbang_izin dari aplikasi.json")
+        self.di_gerbang = True
+        try:
+            for n, langkah in enumerate(g.get("langkah", []), 1):
+                target = langkah.get("target")
+                if target and self.tunggu_elemen(target, float(langkah.get("batas_cari_detik", 4))) is None:
+                    log(f"  (gerbang) elemen {json.dumps(target, ensure_ascii=False)} tidak ada, dilewati")
+                    continue
+                s = {**langkah, "nama": langkah.get("nama") or f"gerbang_{n}",
+                     "catatan": ((langkah.get("catatan") or "") + " | langkah gerbang izin aplikasi, dijalankan skrip").strip(" |")}
+                self.satu_langkah(self.rencana_ke or 0, s)
+        finally:
+            self.di_gerbang = False
+        lolos = not self.ada(g["tanda"])
+        log("  gerbang izin aplikasi " + ("terlewati" if lolos else "MASIH tampil (cek aplikasi.json -> gerbang_izin)"))
+        return lolos
 
     def pulihkan_ke_app(self, i):
         """Aplikasi membuka layar sistem (Pengaturan/dialog izin): catat, izinkan, lalu kembali ke aplikasi."""
@@ -758,6 +1117,7 @@ class Pelaksana:
     # ---------- eksekusi rencana
     def jalankan(self, rencana):
         for i, s in enumerate(rencana["langkah"], 1):
+            self.berikutnya = rencana["langkah"][i] if i < len(rencana["langkah"]) else None
             if s["aksi"] not in ("buka_aplikasi", "reset_aplikasi") and self.di_luar_app():
                 self.pulihkan_ke_app(i)
             if not self.satu_langkah(i, s) and not s.get("lanjut_jika_gagal"):
@@ -893,6 +1253,8 @@ class Pelaksana:
             catatan=("cold start; " if cold else "") + "respon_ms = sampai layar pertama punya elemen yang bisa diklik",
         )
         self.tutup_dialog_izin()
+        if ok and (self.berikutnya or {}).get("aksi") != "login":  # kalau langsung login, gerbang ditangani sesudahnya
+            self.lewati_gerbang()
         return ok
 
     def form_login_ada(self):
@@ -998,6 +1360,7 @@ class Pelaksana:
         if ok:
             tulis_status_login(self.pkg, peran)
             self.tutup_dialog_izin()
+            self.lewati_gerbang()
         return ok
 
     def login(self, nama, peran, bersihkan, paksa_ulang=False):
@@ -1019,8 +1382,10 @@ class Pelaksana:
             sebelumnya = baca_status_login().get(self.pkg, {}).get("peran")
             if sebelumnya == peran and not paksa_ulang:
                 log(f"  masih login sebagai {peran} dari uji sebelumnya; login tidak diulang")
-                return self.catat_langkah(f"{nama}_sudah_login", stabil=False,
-                                          catatan=f"sesi login {peran} sebelumnya masih aktif; login tidak diulang")
+                ok = self.catat_langkah(f"{nama}_sudah_login", stabil=False,
+                                        catatan=f"sesi login {peran} sebelumnya masih aktif; login tidak diulang")
+                self.lewati_gerbang()
+                return ok
             if not bersihkan:
                 return self.gagal_langkah(nama, "form login tidak ditemukan (kemungkinan masih login)")
             log("  form login tidak ada (kemungkinan masih login akun lain); menghapus data aplikasi lalu membuka ulang")
@@ -1090,6 +1455,7 @@ class Pelaksana:
         if ok:
             tulis_status_login(self.pkg, peran)
             self.tutup_dialog_izin()
+            self.lewati_gerbang()
         else:
             log("  masih di form login: cek screenshot langkah terakhir (pesan error atau akun salah?)")
         return ok
@@ -1121,9 +1487,24 @@ def muat_konfigurasi(path):
     if not path.exists():
         raise Gagal(f"file akun tidak ditemukan: {path} (salin akun.contoh.json menjadi akun.json lalu isi akunnya)")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        cfg = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise Gagal(f"akun.json tidak valid: {e}") from e
+    if FILE_APLIKASI.exists():  # perilaku per aplikasi (gerbang izin, label di HP); akun.json tetap menang
+        try:
+            tambahan = json.loads(FILE_APLIKASI.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise Gagal(f"aplikasi.json tidak valid: {e}") from e
+        cfg.setdefault("hp", {})
+        for k, v in (tambahan.get("hp") or {}).items():
+            if not k.startswith("_"):
+                cfg["hp"].setdefault(k, v)
+        for kode, isi in tambahan.get("aplikasi", {}).items():
+            if kode in cfg.get("aplikasi", {}):
+                for k, v in isi.items():
+                    if not k.startswith("_"):
+                        cfg["aplikasi"][kode].setdefault(k, v)
+    return cfg
 
 
 def sambung_appium():
@@ -1135,6 +1516,8 @@ def sambung_appium():
     opsi = UiAutomator2Options()
     opsi.no_reset = True
     opsi.new_command_timeout = 600
+    if SERIAL_AKTIF:
+        opsi.udid = SERIAL_AKTIF  # HP yang sama dengan yang dipakai perintah adb
     try:
         return webdriver.Remote(APPIUM_URL, options=opsi)
     except Exception as e:  # noqa: BLE001
@@ -1149,11 +1532,13 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
 
     kode_app = rencana["aplikasi"]
     app = cfg["aplikasi"][kode_app]
+    pastikan_hp(cfg)
+    if not aplikasi_terpasang(app["package"]):
+        raise Gagal(f"aplikasi {app['package']} tidak terpasang di HP ({SERIAL_AKTIF})")
     info = info_perangkat(app["package"])
     if not info["model"]:
-        raise Gagal("HP tidak terdeteksi oleh adb; cek dengan: adb devices")
-    if not info["versi_aplikasi"]:
-        raise Gagal(f"aplikasi {app['package']} tidak terpasang di HP")
+        raise Gagal(f"HP {SERIAL_AKTIF} tidak menjawab perintah adb. Cek kabel USB dan buka kunci layar HP, "
+                    "lalu jalankan lagi")
 
     folder = Path(folder) if folder else (
         FOLDER_DASAR / f"{datetime.now():%Y%m%d_%H%M%S}_{kode_app}_{_slug(rencana.get('judul', 'uji'))}")
@@ -1166,6 +1551,12 @@ def jalankan_rencana(rencana, cfg, rekam=False, folder=None, izinkan_berisiko=Fa
     p.peran_aktif = rencana.get("peran")
     p.beri_izin = rencana.get("beri_izin_otomatis", p.beri_izin)
     p.izin_ulang("awal uji")
+    if p.beri_izin and rencana["langkah"][0]["aksi"] == "buka_aplikasi":
+        st = p.aktifkan_autostart()
+        if st:
+            p.izin_otomatis.append({"saat": "awal uji", "runtime": [], "appops": [],
+                                    "lain": [] if st == "gagal" else ["autostart_xiaomi"],
+                                    "gagal": ["AUTOSTART_XIAOMI"] if st == "gagal" else []})
     mulai = datetime.now().isoformat(timespec="seconds")
     t0 = time.perf_counter()
     berhasil, video = False, None
@@ -1237,6 +1628,42 @@ def perintah_lihat(args, cfg):
             "metrik": akhir["metrik"],
         }
     return hasil
+
+
+def perintah_siapkan(args, cfg):
+    """Persiapan HP sekali jalan: beri semua izin lewat adb + nyalakan Autostart (Xiaomi) untuk tiap aplikasi."""
+    kode_app = [args.app] if args.app else list(cfg.get("aplikasi", {}))
+    for kode in kode_app:
+        if kode not in cfg.get("aplikasi", {}):
+            raise Gagal(f"aplikasi '{kode}' tidak ada di akun.json")
+    pastikan_hp(cfg)
+    log(f"HP: {adb_baca('shell', 'getprop', 'ro.product.manufacturer').strip()} "
+        f"{adb_baca('shell', 'getprop', 'ro.product.model').strip()} ({SERIAL_AKTIF})")
+    hasil, driver = {}, None
+    try:
+        for kode in kode_app:
+            app = cfg["aplikasi"][kode]
+            if not aplikasi_terpasang(app["package"]):
+                log(f"- {kode}: {app['package']} tidak terpasang di HP, dilewati")
+                hasil[kode] = {"status": "tidak_terpasang"}
+                continue
+            info = info_perangkat(app["package"])
+            log(f"- {kode} ({app['package']})")
+            izin = beri_izin_adb(app["package"])
+            if driver is None:
+                log(f"Menyambung ke Appium di {APPIUM_URL} ...")
+                driver = sambung_appium()
+            (FOLDER_DASAR / "persiapan").mkdir(parents=True, exist_ok=True)
+            p = Pelaksana(driver, cfg, kode, FOLDER_DASAR / "persiapan", info)
+            gagal_dulu = (baca_autostart().get(app["package"]) or {}).get("status") == "gagal"
+            hasil[kode] = {"status": "ok", "izin": izin, "autostart": p.aktifkan_autostart(paksa=args.paksa or gagal_dulu)}
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+    return {"status": "selesai", "aplikasi": hasil}
 
 
 SKEMA = """FORMAT RENCANA UJI (JSON) UNTUK agen_uji.py
@@ -1342,6 +1769,10 @@ def main(argv=None):
     pj.add_argument("--izinkan-berisiko", action="store_true",
                     help="izinkan tap tombol yang mengubah data (hapus, simpan, kirim, bayar, keluar, ...)")
 
+    pp = sub.add_parser("siapkan", help="beri semua izin + nyalakan Autostart (Xiaomi) untuk aplikasi uji")
+    pp.add_argument("--app", help="hanya aplikasi ini (bawaan: semua di akun.json)")
+    pp.add_argument("--paksa", action="store_true", help="periksa ulang Autostart walau tercatat sudah aktif")
+
     pa = sub.add_parser("analisis", help="analisis file XML struktur layar, tanpa HP")
     pa.add_argument("xml")
     pa.add_argument("--density", type=float, help="faktor density = dpi/160, misalnya 2.75")
@@ -1356,6 +1787,9 @@ def main(argv=None):
         cfg = muat_konfigurasi(args.akun)
         if args.perintah == "skema":
             print(perintah_skema(args, cfg))
+            return 0
+        if args.perintah == "siapkan":
+            print(json.dumps(perintah_siapkan(args, cfg), ensure_ascii=False))
             return 0
         if args.perintah == "lihat":
             if args.app not in cfg.get("aplikasi", {}):

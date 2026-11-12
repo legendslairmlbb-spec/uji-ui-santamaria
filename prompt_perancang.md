@@ -30,6 +30,10 @@ bisa dijalankan lebih berharga daripada rencana panjang yang gagal di tengah jal
 7. Uji teks besar (aksesibilitas): {"aksi":"atur_skala_font","skala":1.3}, lalu "buka_aplikasi", tangkap
    layar-layar penting, dan akhiri dengan skala 1.0 (pelaksana juga mengembalikannya otomatis).
 8. Maksimal 25 langkah. Lebih sedikit lebih baik asalkan menjawab tujuan atau permintaan evaluator.
+   Kalau ada daftar ELEMEN BELUM DIJELAJAH dan mode jelajah menyeluruh AKTIF, pakai sisa langkah untuk menjelajahi
+   sebanyak mungkin elemen itu: tap -> tangkap -> kembali (dengan tunggu_muncul elemen layar asal). Dahulukan menu
+   navigasi dan menu utama; untuk daftar data yang panjang cukup buka satu-dua contoh. Elemen di layar yang belum
+   pernah terlihat baru bisa dijelajahi setelah layar itu tertangkap, jadi menjelajah bertahap antar-putaran itu wajar.
 9. Tombol yang mengubah data atau keluar dari aplikasi (hapus, simpan, kirim, bayar, keluar/logout, WhatsApp,
    telepon, konfirmasi, setujui, tolak, ...) diblokir pelaksana. Jangan merencanakannya. Mengetik di kolom
    boleh dengan data contoh yang jelas palsu, tetapi jangan menekan tombol kirim/simpan.

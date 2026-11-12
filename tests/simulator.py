@@ -19,6 +19,13 @@ PKG = "id.co.santamaria.app"
 PKG_WASIAT = "id.co.santamaria.wasiat"
 PKG_GMS = "com.google.android.gms"
 PKG_SETELAN = "com.android.settings"
+PKG_KEAMANAN = "com.miui.securitycenter"
+LABEL_APP = {PKG: "Santa Maria", PKG_WASIAT: "Wasiat", "id.co.santamaria.yayasan": "Yayasan Sosial Santa Maria",
+             "com.android.chrome": "Chrome"}
+# Daftar Autostart panjang (seperti HP sungguhan): aplikasi uji ada jauh di bawah, tidak terlihat tanpa Cari/gulir.
+DAFTAR_AUTOSTART = (["com.android.chrome"] + [f"com.contoh.app{i:02d}" for i in range(1, 30)]
+                    + ["id.co.santamaria.yayasan", PKG, PKG_WASIAT])
+LABEL_APP.update({f"com.contoh.app{i:02d}": f"Aplikasi Contoh {i:02d}" for i in range(1, 30)})
 IZIN_NOTIF = "android.permission.POST_NOTIFICATIONS"
 IZIN_DIMINTA = [IZIN_NOTIF, "android.permission.CAMERA", "android.permission.ACCESS_FINE_LOCATION",
                 "android.permission.ACCESS_BACKGROUND_LOCATION"]
@@ -123,6 +130,75 @@ def layar_pengaturan(aktif):
                  baris, lain, pkg=PKG_SETELAN)
 
 
+def layar_info_app(pkg, aktif, tanpa_autostart):
+    """Halaman Info aplikasi MIUI/HyperOS dengan sakelar 'Mulai otomatis'."""
+    baris = "" if tanpa_autostart else node(
+        "android.widget.LinearLayout", pkg=PKG_KEAMANAN, clickable="true", bounds="[0,700][1220,900]", anak=(
+            node("android.widget.LinearLayout", pkg=PKG_KEAMANAN, bounds="[60,720][960,880]", anak=(
+                node("android.widget.TextView", pkg=PKG_KEAMANAN, text="Mulai otomatis", bounds="[60,720][960,790]")
+                + node("android.widget.TextView", pkg=PKG_KEAMANAN,
+                       text="Izinkan aplikasi berjalan otomatis di latar belakang dan dimulai oleh aplikasi lain",
+                       bounds="[60,800][960,880]")))
+            + node("miuix.slidingwidget.widget.SlidingButton", pkg=PKG_KEAMANAN, checkable="true",
+                   checked="true" if aktif else "false", clickable="true", bounds="[1020,760][1160,840]")))
+    return layar(node("android.widget.TextView", pkg=PKG_KEAMANAN, text="Info aplikasi", bounds="[60,150][1160,260]"),
+                 node("android.widget.TextView", pkg=PKG_KEAMANAN, text=LABEL_APP.get(pkg, pkg), bounds="[60,400][1160,500]"),
+                 baris,
+                 node("android.widget.TextView", pkg=PKG_KEAMANAN, text="Penghemat baterai", clickable="true",
+                      bounds="[60,950][1160,1050]"), pkg=PKG_KEAMANAN)
+
+
+def baris_autostart():
+    """Baris yang terlihat di daftar Autostart: [(paket, y_atas)]. Tanpa Cari hanya 8 baris pertama yang tampil."""
+    if SIM.cari_teks:
+        paket = [x for x in DAFTAR_AUTOSTART if SIM.cari_teks.lower() in LABEL_APP[x].lower()]
+    else:
+        paket = DAFTAR_AUTOSTART[:8]
+    return [(x, 400 + i * 200) for i, x in enumerate(paket[:10])]
+
+
+def layar_daftar_autostart(aktif):
+    """Daftar 'Mulai otomatis di latar belakang' di aplikasi Keamanan, dengan ikon Cari."""
+    baris = ""
+    for pkg, y in baris_autostart():  # struktur seperti HyperOS asli: baris = Switch yang berisi Switch geser
+        nyala = "true" if pkg in aktif else "false"
+        baris += node("android.widget.Switch", pkg=PKG_KEAMANAN, content_desc=LABEL_APP[pkg], checkable="true",
+                      checked=nyala, clickable="true", bounds=f"[37,{y}][1183,{y + 180}]", anak=(
+            node("android.widget.ImageView", pkg=PKG_KEAMANAN, resource_id="com.miui.securitycenter:id/icon",
+                 bounds=f"[87,{y + 30}][211,{y + 150}]")
+            + node("android.widget.TextView", pkg=PKG_KEAMANAN, text=LABEL_APP[pkg],
+                   resource_id="com.miui.securitycenter:id/title", bounds=f"[261,{y + 50}][960,{y + 130}]")
+            + node("android.widget.Switch", pkg=PKG_KEAMANAN, checkable="true", checked=nyala, clickable="true",
+                   resource_id="com.miui.securitycenter:id/sliding_button", bounds=f"[1020,{y + 50}][1160,{y + 130}]")))
+    atas = (node("android.widget.EditText", pkg=PKG_KEAMANAN, text=SIM.cari_teks, clickable="true",
+                 bounds="[60,150][900,260]")
+            + node("android.widget.TextView", pkg=PKG_KEAMANAN, text="Batal", clickable="true", bounds="[950,150][1160,260]")
+            if SIM.cari_aktif else
+            node("android.widget.TextView", pkg=PKG_KEAMANAN, text="Mulai otomatis di latar belakang", bounds="[60,150][900,260]")
+            + node("android.widget.ImageView", pkg=PKG_KEAMANAN, content_desc="Cari", clickable="true",
+                   bounds="[960,150][1060,260]"))
+    return layar(atas, node("androidx.recyclerview.widget.RecyclerView", pkg=PKG_KEAMANAN, scrollable="true",
+                            bounds="[0,380][1220,2400]", anak=baris), pkg=PKG_KEAMANAN)
+
+
+def layar_gerbang(lembar, centang, konfirmasi):
+    """Halaman 'Izin aplikasi' milik Santa Maria + lembar konfirmasi Autostart (seperti di HP sungguhan)."""
+    status = "Aktif" if konfirmasi else "Belum aktif"
+    isi = [node("android.view.View", content_desc="Izin aplikasi", bounds="[0,150][1220,260]"),
+           node("android.widget.Button", clickable="true", bounds="[40,600][1180,1450]",
+                content_desc=f"IZIN YANG PERLU DIAKTIFKAN&#10;Aktifkan Autostart (HP), HP Anda memblokir aplikasi. {status}"),
+           node("android.widget.Button", content_desc="Periksa ulang", clickable="true", bounds="[40,2380][1180,2530]")]
+    if lembar:
+        isi = isi[:1] + [
+            node("android.view.View", content_desc="Aktifkan autostart", bounds="[40,450][1180,560]"),
+            node("android.widget.CheckBox", checkable="true", checked="true" if centang else "false", clickable="true",
+                 content_desc="Saya sudah mengaktifkan autostart untuk Santa Maria", bounds="[40,1950][1180,2060]"),
+            node("android.widget.Button", content_desc="Sudah aktif", clickable="true",
+                 enabled="true" if centang else "false", bounds="[60,2100][1160,2250]"),
+            node("android.widget.Button", content_desc="Buka pengaturan", clickable="true", bounds="[300,2280][900,2400]")]
+    return layar(*isi)
+
+
 class Sim:
     def __init__(self):
         self.login_sebagai = "dummy.admin@contoh.test"  # HP masih login akun lain
@@ -140,6 +216,20 @@ class Sim:
         self.izin_runtime = set()
         self.appops = set()
         self.overlay_ui = False   # diizinkan lewat sakelar di Pengaturan
+        self.autostart = set()    # paket yang Autostart-nya aktif (Xiaomi)
+        self.info_pkg = None
+        self.info_tanpa_autostart = False  # simulasi HyperOS yang tidak menaruh sakelar di Info aplikasi
+        self.cari_aktif = False
+        self.cari_teks = ""
+        self.daftar_autostart_tidak_ada = False  # simulasi HP yang tidak punya halaman daftar Autostart
+        self.gerbang_ok = False   # konfirmasi Autostart di dalam aplikasi (tersimpan di data aplikasi)
+        self.gerbang_lembar = False
+        self.gerbang_centang = False
+        self.gerbang_konfirmasi = False
+        self.perangkat = [("SIM0001", "device")]  # isi 'adb devices'
+        self.adb_tidak_ada = False                # simulasi adb tidak terpasang di komputer
+        self.pulih_setelah_reconnect = False      # 'adb reconnect offline' memulihkan HP yang offline
+        self.udid_terakhir = None                 # udid yang dikirim ke Appium
         self.reset_login()
 
     def reset_login(self):
@@ -175,6 +265,14 @@ class Sim:
             return self.pohon_login
         if self.layar == "pengaturan":
             return ET.fromstring(layar_pengaturan(self.overlay_ui).encode("utf-8"))
+        if self.layar == "info_app":
+            return ET.fromstring(layar_info_app(self.info_pkg, self.info_pkg in self.autostart,
+                                                self.info_tanpa_autostart).encode("utf-8"))
+        if self.layar == "daftar_autostart":
+            return ET.fromstring(layar_daftar_autostart(self.autostart).encode("utf-8"))
+        if self.layar == "home" and self.app == "santamaria" and not self.gerbang_ok:
+            return ET.fromstring(layar_gerbang(self.gerbang_lembar, self.gerbang_centang,
+                                               self.gerbang_konfirmasi).encode("utf-8"))
         kunci = "home_bawah" if (self.layar == "home" and self.tergulir) else self.layar
         return ET.fromstring(LAYAR[kunci].encode("utf-8"))
 
@@ -196,6 +294,9 @@ def cocok(el, panggilan):
             "packageName": lambda: a("package") == v,
             "packageNameMatches": lambda: re.fullmatch(v, a("package")) is not None,
             "clickable": lambda: a("clickable") == v.strip(), "instance": lambda: True,
+            "checkable": lambda: a("checkable") == v.strip(),
+            "descriptionMatches": lambda: re.fullmatch(v, a("content-desc")) is not None,
+            "textMatches": lambda: re.fullmatch(v, a("text")) is not None,
         }
         if nama not in uji:
             raise ValueError(f"metode UiSelector belum didukung simulator: {nama}")
@@ -214,6 +315,24 @@ class El:
     def click(self):
         cd, tx, kls = self.e.get("content-desc") or "", self.e.get("text") or "", self.e.get("class")
         SIM.panggilan.append(("klik", cd or tx))
+        if self.e.get("enabled") == "false":
+            return  # tombol nonaktif tidak bereaksi
+        if SIM.layar == "daftar_autostart":
+            if cd == "Cari":
+                SIM.cari_aktif = True
+            elif tx == "Batal":
+                SIM.cari_aktif, SIM.cari_teks = False, ""
+            return
+        if SIM.layar == "home" and SIM.app == "santamaria" and not SIM.gerbang_ok:
+            if cd.startswith("IZIN YANG PERLU DIAKTIFKAN"):
+                SIM.gerbang_lembar = True
+            elif cd.startswith("Saya sudah mengaktifkan"):
+                SIM.gerbang_centang = not SIM.gerbang_centang
+            elif cd == "Sudah aktif":
+                SIM.gerbang_konfirmasi, SIM.gerbang_lembar = True, False
+            elif cd == "Periksa ulang" and SIM.gerbang_konfirmasi:
+                SIM.gerbang_ok = True
+            return
         if SIM.layar == "izin" and tx == "Izinkan":
             SIM.izin_tertunda = False
             SIM.izin_runtime.add(IZIN_NOTIF)
@@ -248,6 +367,11 @@ class El:
         self.e.set("text", "")
 
     def send_keys(self, t):
+        if SIM.layar == "daftar_autostart":
+            SIM.cari_teks = t
+            SIM.keyboard = True
+            SIM.panggilan.append(("cari_autostart", t))
+            return
         if self.e.get("password") == "true":
             SIM.ketikan["sandi"] = t
             self.e.set("text", "*" * len(t))
@@ -272,6 +396,7 @@ def video_palsu(detik):
 class Driver:
     def __init__(self, *a, **k):
         SIM.panggilan.append(("sesi_appium",))
+        SIM.udid_terakhir = getattr(k.get("options"), "udid", None)
 
     def find_elements(self, by, nilai):
         simpul = [e for e in SIM.pohon().iter() if e.tag != "hierarchy"]
@@ -313,7 +438,7 @@ class Driver:
             SIM.pohon()  # jalankan transisi yang sudah jatuh tempo
             return PKG_GMS if SIM.layar == "w_pemilih" else PKG_WASIAT
         return {"launcher": "com.miui.home", "izin": "com.google.android.permissioncontroller",
-                "pengaturan": PKG_SETELAN}.get(SIM.layar, PKG)
+                "pengaturan": PKG_SETELAN, "info_app": PKG_KEAMANAN, "daftar_autostart": PKG_KEAMANAN}.get(SIM.layar, PKG)
 
     def get_screenshot_as_file(self, p):
         """PNG sungguhan seukuran layar HP (latar putih, kotak abu-abu per elemen berlabel)."""
@@ -337,10 +462,15 @@ class Driver:
 
     def hide_keyboard(self):
         SIM.keyboard = False
+        if SIM.layar == "daftar_autostart" and SIM.cari_aktif:  # seperti HyperOS: Back keluar dari mode Cari
+            SIM.cari_aktif, SIM.cari_teks = False, ""
 
     def back(self):
         SIM.transisi = None
         SIM.layar = "home" if SIM.layar in ("laporan", "memuat", "pengaturan", "mengambang") else "launcher"
+
+    def update_settings(self, pengaturan):
+        SIM.panggilan.append(("pengaturan_appium", dict(pengaturan)))
 
     def get_window_size(self):
         return {"width": 1220, "height": 2712}
@@ -354,6 +484,16 @@ class Driver:
     def tap(self, posisi, duration=None):
         SIM.panggilan.append(("tap", posisi))
         x, y = posisi[0]
+        if SIM.layar == "info_app" and 1020 <= x <= 1160 and 760 <= y <= 840 and not SIM.info_tanpa_autostart:
+            SIM.autostart.add(SIM.info_pkg)
+            SIM.panggilan.append(("autostart_info", SIM.info_pkg))
+            return
+        if SIM.layar == "daftar_autostart" and 37 <= x <= 1183:  # ketuk di mana pun pada baris = sakelar
+            for pkg, atas in baris_autostart():
+                if atas <= y <= atas + 180:
+                    SIM.autostart.add(pkg)
+                    SIM.panggilan.append(("autostart_daftar", pkg))
+            return
         if SIM.layar == "pengaturan" and 1020 <= x <= 1160 and 760 <= y <= 840:
             SIM.overlay_ui = True
             SIM.panggilan.append(("sakelar_overlay", True))
@@ -389,6 +529,8 @@ def adb_palsu(*args, timeout=60):
     for k, v in jawaban.items():
         if k in s:
             return v
+    if s.startswith("shell pm path"):
+        return f"package:/data/app/~~sim/{args[-1]}-1/base.apk\n" if args[-1] in (PKG, PKG_WASIAT) else ""
     if "dumpsys package" in s:
         if PKG_WASIAT in s:
             return "    versionName=1.0.5\n"
@@ -419,12 +561,24 @@ def adb_palsu(*args, timeout=60):
         SIM.wasiat_login = None
         return "Success\n"
     if "pm clear" in s:
+        SIM.gerbang_ok = SIM.gerbang_lembar = SIM.gerbang_centang = SIM.gerbang_konfirmasi = False
         SIM.izin_runtime.clear()
         SIM.appops.clear()
         SIM.overlay_ui = False
         SIM.login_sebagai, SIM.izin_tertunda = None, True
         SIM.reset_login()
         return "Success\n"
+    if "APPLICATION_DETAILS_SETTINGS" in s:
+        SIM.layar, SIM.info_pkg = "info_app", s.split("package:")[-1].strip()
+        return "Starting: Intent { act=android.settings.APPLICATION_DETAILS_SETTINGS }\n"
+    if "am start" in s and PKG_KEAMANAN in s:
+        if SIM.daftar_autostart_tidak_ada:
+            return "Error: Activity class {com.miui.securitycenter/...} does not exist.\n"
+        SIM.layar, SIM.cari_aktif, SIM.cari_teks = "daftar_autostart", False, ""
+        return "Starting: Intent { cmp=com.miui.securitycenter/... }\n"
+    if "input keyevent KEYCODE_HOME" in s:
+        SIM.layar = "launcher"
+        return ""
     if "am start" in s:
         SIM.app = "wasiat" if PKG_WASIAT in s else "santamaria"
         SIM.buka()
@@ -432,9 +586,38 @@ def adb_palsu(*args, timeout=60):
     return ""
 
 
+def adb_mentah_palsu(args, timeout=60):
+    """Lapisan adb paling bawah -> (kode_keluar, stdout, stderr), meniru adb sungguhan: status sambungan
+    dari SIM.perangkat; galat adb (HP tidak ada / unauthorized / offline / lebih dari satu) masuk stderr."""
+    args = [str(a) for a in args]
+    s = " ".join(args)
+    if SIM.adb_tidak_ada:
+        return None, "", "[WinError 2] The system cannot find the file specified"
+    if args[:1] == ["devices"]:
+        SIM.panggilan.append(("adb", s))
+        return 0, "List of devices attached\n" + "".join(f"{a}\t{b}\n" for a, b in SIM.perangkat) + "\n", ""
+    if args[:1] == ["reconnect"]:
+        SIM.panggilan.append(("adb", s))
+        if SIM.pulih_setelah_reconnect:
+            SIM.perangkat = [(a, "device" if b == "offline" else b) for a, b in SIM.perangkat]
+        return 0, "", ""
+    siap = [a for a, b in SIM.perangkat if b == "device"]
+    if not siap:
+        SIM.panggilan.append(("adb", s))
+        status = {b for _, b in SIM.perangkat}
+        return 1, "", ("adb.exe: device unauthorized.\nThis adb server's $ADB_VENDOR_KEYS is not set\n"
+                       if "unauthorized" in status else "adb.exe: device offline\n" if "offline" in status
+                       else "adb.exe: no devices/emulators found\n")
+    if len(siap) > 1 and os.environ.get("ANDROID_SERIAL") not in siap:
+        SIM.panggilan.append(("adb", s))
+        return 1, "", "adb.exe: more than one device/emulator\n"
+    return 0, adb_palsu(*args, timeout=timeout), ""
+
+
 def pasang(agen_uji):
     """Arahkan agen_uji ke simulator: adb palsu + appium.webdriver.Remote palsu."""
     import appium.webdriver as wd_asli
-    agen_uji.adb = adb_palsu
+    agen_uji._adb_mentah = adb_mentah_palsu
+    agen_uji.JEDA_CEK_HP = 0
     wd_asli.Remote = Driver
     return SIM

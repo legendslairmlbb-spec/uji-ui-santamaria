@@ -74,7 +74,7 @@ LLM_BAWAAN = {
     "maks_gambar_evaluator": 14,
 }
 PENGATURAN_BAWAAN = {"ambang_yakin": 0.75, "maks_putaran": 3, "rekam": True, "boleh_ubah_data": False,
-                     "beri_izin_otomatis": True}
+                     "beri_izin_otomatis": True, "jelajah_menyeluruh": False}
 TUJUAN_BAWAAN = (
     "Evaluasi UI/UX alur utama peran ini: (1) aksesibilitas - label elemen untuk pembaca layar, ukuran area "
     "sentuh, kontras, dukungan teks besar; (2) waktu respons - startup, login, perpindahan layar, ada tidaknya "
@@ -544,6 +544,7 @@ def bangun_peta(sesi, kontras=False):
                 continue
             label = [e["label"].replace("\n", " ") for e in elemen if e.get("label")]
             s = {"id": f"L{len(layar) + 1}", "_tanda": tanda, "refs": [ref], "run": rid, "folder": folder,
+                 "asal": {"aksi": lk.get("aksi"), "langkah": lk["langkah"], "sistem": bool(lk.get("keluar_ke_pengaturan"))},
                  "screenshot": folder / lk["screenshot"] if lk.get("screenshot") else None,
                  "elemen": elemen, "metrik": lk.get("metrik") or {}, "density": density,
                  "jalur": jalur[-6:], "judul": " / ".join(label[:2])[:70] or "(tanpa teks)"}
@@ -559,6 +560,55 @@ def bangun_peta(sesi, kontras=False):
             s["kontras"] = cache[kunci]
         tulis_json(cache_f, cache)
     return {"layar": layar, "ref_layar": ref_layar, "runs": runs}
+
+
+def layar_bisa_dijelajah(s):
+    """Layar aplikasi biasa (bukan form login, gerbang izin, atau layar sistem) yang menunya perlu dijelajah."""
+    a = s.get("asal") or {}
+    if a.get("sistem") or a.get("aksi") in ("login", "izin_pengaturan"):
+        return False
+    if str(a.get("langkah", "")).startswith(("gerbang_", "layar_sistem", "izinkan_di_pengaturan")):
+        return False
+    return not any(e.get("kata_sandi") for e in s["elemen"])
+
+
+def cakupan_elemen(peta):
+    """Elemen yang bisa diklik di layar-layar yang sudah dikenal vs yang sudah pernah diketuk rencana mana pun."""
+    tap = []
+    for run in peta["runs"]:
+        for st in (baca_json(run["folder"] / "rencana.json") or {}).get("langkah", []):
+            if st.get("aksi") == "tap" and isinstance(st.get("target"), dict):
+                tap.append(st["target"])
+
+    def sudah(e, label):
+        for t in tap:
+            if t.get("label") and t["label"].strip() == label:
+                return True
+            if t.get("label_mengandung") and t["label_mengandung"] in label:
+                return True
+            if t.get("koordinat") and e.get("kotak"):
+                x, y = t["koordinat"][:2]
+                b = e["kotak"]
+                if b[0] <= x <= b[2] and b[1] <= y <= b[3]:
+                    return True
+        return False
+
+    total, belum, kunci_dilihat = 0, [], set()
+    for s in peta["layar"]:
+        if not layar_bisa_dijelajah(s):
+            continue
+        for e in s["elemen"]:
+            label = (e.get("label") or "").strip()
+            if not e.get("bisa_diklik") or e.get("kelas") == "EditText" or not label:
+                continue
+            kunci = label.split("\n")[0][:60]
+            if len(label) > 80 or eks.label_berisiko(label) or kunci in kunci_dilihat:
+                continue
+            kunci_dilihat.add(kunci)
+            total += 1
+            if not sudah(e, label):
+                belum.append({"layar": s["id"], "label": kunci, "kelas": e.get("kelas")})
+    return {"total": total, "sudah": total - len(belum), "belum": belum}
 
 
 def masalah_berkode(s):
@@ -757,6 +807,15 @@ def agen_perancang(sesi, k, ctx):
             f"{t.get('id')} {t.get('judul')}" for t in ev.get("temuan", [])[:15]),
             "", "PERMINTAAN EVALUATOR UNTUK PUTARAN INI (prioritas utama):",
             json.dumps(ev.get("permintaan_uji_ulang", []), ensure_ascii=False)]
+    cak = cakupan_elemen(peta)
+    if cak["total"]:
+        teks += ["", f"CAKUPAN ELEMEN: {cak['sudah']} dari {cak['total']} elemen yang bisa diklik sudah pernah diketuk."]
+        if cak["belum"]:
+            teks += [("ELEMEN BELUM DIJELAJAH - mode jelajah menyeluruh AKTIF: jelajahi sebanyak mungkin di putaran ini "
+                      "(maks. 25 langkah), pola tap -> tangkap -> kembali; dahulukan menu utama/navigasi:"
+                      if atur.get("jelajah_menyeluruh") else
+                      "ELEMEN BELUM DIJELAJAH (opsional, kerjakan kalau relevan dengan tujuan):"),
+                     json.dumps(cak["belum"][:40], ensure_ascii=False)]
     teks += ["", "Susun rencana uji untuk putaran ini. Keluarkan HANYA objek JSON rencana."]
     isi = [{"type": "text", "text": "\n".join(teks)}]
 
@@ -864,6 +923,9 @@ def agen_evaluator(sesi, k, ctx):
                  f"berhasil={rencana.get('berhasil')}, rekaman={'ada' if rencana.get('rekaman') else 'tidak ada'}; "
                  f"{ringkas_izin(rencana)}:",
                  json.dumps(tabel_langkah(run, peta["ref_layar"]), ensure_ascii=False)]
+    cak = cakupan_elemen(peta)
+    teks += ["", f"CAKUPAN ELEMEN: {cak['sudah']} dari {cak['total']} elemen yang bisa diklik sudah dijelajah"
+             + (f"; belum: {json.dumps(cak['belum'][:25], ensure_ascii=False)}" if cak["belum"] else "")]
     teks += ["", "HASIL TERUKUR OTOMATIS (startup, langkah >= 1 detik, langkah gagal, statistik pengukuran berulang):",
              json.dumps(ukur, ensure_ascii=False),
              "", "LAYAR UNIK DAN MASALAH OTOMATIS:",
@@ -928,11 +990,23 @@ def agen_evaluator(sesi, k, ctx):
         ev["permintaan_uji_ulang"].append({"jenis": "perbaiki_langkah_gagal", "alasan": "ditambahkan otomatis",
                                            "tugas": f"Langkah P{k}.{gagal['no']} '{gagal['langkah']}' gagal ({gagal.get('galat')}); "
                                                     "susun ulang langkah itu memakai elemen yang benar-benar ada di peta layar."})
-    if ev["keyakinan"] >= ambang:
-        alasan = f"keyakinan {ev['keyakinan']:.2f} >= ambang {ambang}"
+    jelajah = bool(atur.get("jelajah_menyeluruh"))
+    if k >= maks_putaran and (ev["keyakinan"] < ambang or (jelajah and cak["belum"])):
+        alasan = (f"putaran maksimal ({maks_putaran}) tercapai; keyakinan {ev['keyakinan']:.2f}"
+                  + (f", {len(cak['belum'])} dari {cak['total']} elemen belum dijelajah" if jelajah and cak["belum"] else ""))
         lanjut = False
-    elif k >= maks_putaran:
-        alasan = f"keyakinan {ev['keyakinan']:.2f} < ambang {ambang}, tetapi putaran maksimal ({maks_putaran}) tercapai"
+    elif jelajah and cak["belum"]:
+        if not any(x["jenis"] == "eksplorasi" for x in ev["permintaan_uji_ulang"]):
+            ev["permintaan_uji_ulang"].append({
+                "jenis": "eksplorasi", "alasan": "mode jelajah menyeluruh (ditambahkan otomatis)",
+                "tugas": "Jelajahi elemen yang belum pernah diketuk: "
+                         + "; ".join(f"{x['layar']} '{x['label']}'" for x in cak["belum"][:12])})
+        alasan = (f"mode jelajah menyeluruh: {len(cak['belum'])} dari {cak['total']} elemen belum dijelajah "
+                  f"(keyakinan {ev['keyakinan']:.2f})")
+        lanjut = True
+    elif ev["keyakinan"] >= ambang:
+        alasan = f"keyakinan {ev['keyakinan']:.2f} >= ambang {ambang}" + (
+            f"; semua {cak['total']} elemen sudah dijelajah" if jelajah and cak["total"] else "")
         lanjut = False
     elif not ev["permintaan_uji_ulang"]:
         alasan = f"keyakinan {ev['keyakinan']:.2f} < ambang {ambang}, tetapi evaluator tidak punya permintaan uji ulang"
@@ -940,7 +1014,8 @@ def agen_evaluator(sesi, k, ctx):
     else:
         alasan = f"keyakinan {ev['keyakinan']:.2f} < ambang {ambang}; {len(ev['permintaan_uji_ulang'])} permintaan uji ulang"
         lanjut = True
-    ev.update({"lanjut": lanjut, "alasan_keputusan": alasan, "putaran": k, "model": model, "waktu": sekarang()})
+    ev.update({"lanjut": lanjut, "alasan_keputusan": alasan, "putaran": k, "model": model, "waktu": sekarang(),
+               "cakupan_elemen": {"total": cak["total"], "sudah": cak["sudah"], "belum": len(cak["belum"])}})
     return ev
 
 
@@ -961,6 +1036,10 @@ def tentukan_skenario(args, ctx):
             atur[k] = getattr(args, attr)
     if getattr(args, "tanpa_rekam", False):
         atur["rekam"] = False
+    if getattr(args, "jelajah", False):
+        atur["jelajah_menyeluruh"] = True
+    if getattr(args, "tanpa_jelajah", False):
+        atur["jelajah_menyeluruh"] = False
     if getattr(args, "izinkan_berisiko", False):
         atur["boleh_ubah_data"] = True
     apps = ctx["cfg"].get("aplikasi", {})
@@ -1083,8 +1162,10 @@ def cmd_evaluasi(args, ctx):
     sesi.simpan()
     log(f"  keyakinan {ev['keyakinan']:.2f}, {len(ev['temuan'])} temuan -> "
         + ("UJI ULANG: " + " | ".join(x["tugas"][:80] for x in ev["permintaan_uji_ulang"]) if ev["lanjut"] else "LAPORAN"))
+    c = ev.get("cakupan_elemen") or {}
     return keluaran(sesi, putaran=p["ke"], keyakinan=ev["keyakinan"], lanjut=ev["lanjut"],
                     alasan=ev["alasan_keputusan"], jumlah_temuan=len(ev["temuan"]),
+                    cakupan=f"{c.get('sudah', 0)}/{c.get('total', 0)}",
                     permintaan=[x["tugas"] for x in ev["permintaan_uji_ulang"]] if ev["lanjut"] else [])
 
 
@@ -1141,6 +1222,8 @@ def data_laporan(sesi, ctx):
            "ambang_yakin": sesi.atur["ambang_yakin"], "alasan_keputusan": ev.get("alasan_keputusan"),
            "ringkasan_eksekutif": ev.get("ringkasan_eksekutif"), "jumlah_temuan": jumlah, "temuan": ev["temuan"],
            "hal_positif": ev.get("hal_positif", []), "cakupan": ev.get("cakupan", {}),
+           "cakupan_elemen": {**{k: v for k, v in cakupan_elemen(peta).items() if k != "belum"},
+                              "belum": cakupan_elemen(peta)["belum"][:60]},
            "pengukuran": {**ukur, "langkah": langkah, "layar": layar}, "riwayat": riwayat, "rekaman": rekaman,
            "model": {"perancang": ctx["llm"]["model_perancang"], "evaluator": ev.get("model")},
            "metode": [eks.CATATAN_METODE, CATATAN_FRAME,
@@ -1210,7 +1293,11 @@ def tulis_markdown(lap, peta, sesi):
                      [[x["id"], x["judul"], x["jumlah_node"], x["kedalaman_maks"], x["elemen_interaktif"],
                        x["jumlah_tanpa_label"], x["jumlah_target_kecil"], x["jumlah_hanya_hint"],
                        x["jumlah_tombol_tidak_bisa_diklik"], x["jumlah_kontras_rendah"]] for x in u["layar"]]),
-           "## Cakupan uji", "", "Sudah diuji:", ""] + [f"- {x}" for x in lap["cakupan"].get("sudah_diuji", [])] + \
+           "## Cakupan uji", "",
+           f"Elemen yang bisa diklik: **{lap['cakupan_elemen']['sudah']} dari {lap['cakupan_elemen']['total']}** sudah dijelajah"
+           + (" (belum: " + ", ".join(f"{x['layar']} '{x['label']}'" for x in lap["cakupan_elemen"]["belum"][:20]) + ")"
+              if lap["cakupan_elemen"]["belum"] else "") + ".", "",
+           "Sudah diuji:", ""] + [f"- {x}" for x in lap["cakupan"].get("sudah_diuji", [])] + \
           ["", "Belum diuji:", ""] + [f"- {x}" for x in lap["cakupan"].get("belum_diuji", [])] + \
           ["", "## Riwayat putaran", "",
            _md_tabel(["Putaran", "Rencana", "Langkah", "Berhasil", "Keyakinan", "Keputusan"],
@@ -1313,7 +1400,10 @@ def tulis_html(lap, peta, sensor):
         if s["screenshot"] and s["screenshot"].exists():
             h.append(f"<figure style='margin:0'><img src='{img(s, anotasi=True, lebar=360)}' alt='Layar {e(s['id'])}'>"
                      f"<figcaption>{e(s['id'])} - {e(s['judul'])}</figcaption></figure>")
-    h.append("</div><h2>Cakupan uji</h2><p><b>Sudah diuji</b></p><ul>"
+    ce = lap["cakupan_elemen"]
+    h.append(f"</div><h2>Cakupan uji</h2><p>Elemen yang bisa diklik: <b>{ce['sudah']} dari {ce['total']}</b> sudah dijelajah"
+             + ("; belum: " + e(", ".join(f"{x['layar']} '{x['label']}'" for x in ce["belum"][:30])) if ce["belum"] else "")
+             + ".</p><p><b>Sudah diuji</b></p><ul>"
              + "".join(f"<li>{e(x)}</li>" for x in lap["cakupan"].get("sudah_diuji", []))
              + "</ul><p><b>Belum diuji</b></p><ul>"
              + "".join(f"<li>{e(x)}</li>" for x in lap["cakupan"].get("belum_diuji", [])) + "</ul>")
@@ -1403,7 +1493,8 @@ def cmd_semua(args, ctx):
     for n in nomor:
         log(f"\n######## Skenario {n}: {ctx['skenario'][n].get('aplikasi')} / {ctx['skenario'][n].get('peran')}")
         a = argparse.Namespace(skenario=n, maks_putaran=args.maks_putaran, ambang=args.ambang,
-                               tanpa_rekam=args.tanpa_rekam, izinkan_berisiko=False)
+                               tanpa_rekam=args.tanpa_rekam, izinkan_berisiko=False,
+                               jelajah=args.jelajah, tanpa_jelajah=args.tanpa_jelajah)
         try:
             hasil.append(cmd_siklus(a, ctx))
         except (GagalOrkestrasi, eks.Gagal) as ex:
@@ -1494,6 +1585,8 @@ def buat_parser():
         sp.add_argument("--maks-putaran", type=int)
         sp.add_argument("--ambang", type=float, help="ambang keyakinan 0-1 untuk langsung membuat laporan")
         sp.add_argument("--tanpa-rekam", action="store_true")
+        sp.add_argument("--jelajah", action="store_true", help="mode jelajah menyeluruh: lanjut sampai semua menu tersentuh")
+        sp.add_argument("--tanpa-jelajah", action="store_true", help="matikan mode jelajah menyeluruh")
         sp.add_argument("--izinkan-berisiko", action="store_true",
                         help="izinkan tap tombol yang mengubah data (hapus/simpan/kirim/bayar/keluar)")
 
@@ -1514,6 +1607,8 @@ def buat_parser():
     ps.add_argument("--maks-putaran", type=int)
     ps.add_argument("--ambang", type=float)
     ps.add_argument("--tanpa-rekam", action="store_true")
+    ps.add_argument("--jelajah", action="store_true")
+    ps.add_argument("--tanpa-jelajah", action="store_true")
     pr = sub.add_parser("ringkasan", help="ringkasan gabungan beberapa sesi")
     pr.add_argument("--sesi", nargs="+", required=True)
     return p

@@ -24,7 +24,8 @@ observasi awal (HP) ─► LLM Perancang ─► Pelaksana (Appium) ─► LLM Ev
 | `agen_uji.py` | pelaksana Appium (bisa juga dipakai sendiri) |
 | `akun.contoh.json` | templat akun uji per aplikasi; salin menjadi `akun.json` |
 | `llm.contoh.json` | templat koneksi 9router/LLM; salin menjadi `llm.json` lalu isi `api_key` |
-| `skenario.json` | daftar sesi uji (aplikasi, peran, tujuan), ambang keyakinan, maks. putaran |
+| `skenario.json` | daftar sesi uji (aplikasi, peran, tujuan), ambang keyakinan, maks. putaran, mode jelajah |
+| `aplikasi.json` | perilaku per aplikasi: nama di HP (`label_hp`) dan langkah melewati halaman izin aplikasi |
 | `prompt_perancang.md`, `prompt_evaluator.md` | system prompt kedua agen |
 | `n8n_workflow_uji_ui.json` | workflow n8n (import ke n8n) |
 | `contoh_rencana.json` | contoh format rencana uji |
@@ -73,7 +74,20 @@ Aplikasi yang mewajibkan semua izin sebelum masuk menu utama ditangani dua lapis
    ke aplikasi, dan menandai langkah itu (`keluar_ke_pengaturan`) supaya evaluator menilainya sebagai temuan UX.
 
 HP **Xiaomi/Redmi/POCO**: aktifkan Opsi pengembang → **USB debugging (Security settings)**; tanpa ini adb tidak
-boleh memberi izin. Untuk menilai alur permintaan izin aplikasi apa adanya, set `"beri_izin_otomatis": false` di
+boleh memberi izin. **Autostart** (izin khusus Xiaomi) tidak bisa lewat adb, jadi pelaksana memeriksanya lewat
+tampilan: membuka daftar "Mulai otomatis", memakai fitur **Cari** dengan nama aplikasi (`label_hp` di
+`aplikasi.json`), lalu menyalakan sakelarnya kalau masih mati (cadangan: halaman Info aplikasi). Kalau sudah
+dinyalakan manual, hasilnya "sudah" dan tidak disentuh. Status (termasuk gagal) dicatat di `autostart.json`
+sehingga tidak dicoba ulang setiap uji; ulangi pemeriksaan dengan `python agen_uji.py siapkan --paksa`.
+
+Halaman izin **di dalam aplikasi** (Santa Maria meminta konfirmasi "Saya sudah mengaktifkan autostart" lalu
+"Sudah aktif" dan "Periksa ulang") dilewati dengan langkah `gerbang_izin` di `aplikasi.json`, setelah buka aplikasi
+atau login. Konfirmasi ini hilang setiap kali data aplikasi dihapus (ganti akun), jadi langkahnya diulang otomatis.
+
+Persiapan HP sekali jalan untuk ketiga aplikasi (izin + Autostart):
+```
+python agen_uji.py siapkan
+``` Untuk menilai alur permintaan izin aplikasi apa adanya, set `"beri_izin_otomatis": false` di
 `skenario.json` (atau di skenario tertentu).
 
 ## Menjalankan dari terminal
@@ -152,7 +166,8 @@ lanjutkan dari langkah yang gagal dengan perintah di atas.
 
 ## Mengatur perilaku
 
-- `skenario.json` → `ambang_yakin` (bawaan 0.75), `maks_putaran` (3), `rekam` (true), `beri_izin_otomatis` (true),
+- `skenario.json` → `jelajah_menyeluruh` (true: loop lanjut sampai semua tombol/menu yang terlihat sudah diketuk,
+  atau sampai `maks_putaran` = 6), `ambang_yakin` (0.75), `rekam` (true), `beri_izin_otomatis` (true),
   `boleh_ubah_data` (false: tombol hapus/simpan/kirim/bayar/keluar/WhatsApp/telepon diblokir pelaksana).
 - `llm.json` → model per agen, `model_cadangan` (dipakai otomatis kalau model utama gagal/kena limit),
   `reasoning_effort_*`, jumlah dan lebar gambar.
@@ -164,8 +179,11 @@ lanjutkan dari langkah yang gagal dengan perintah di atas.
 |---|---|
 | `tidak bisa menyambung ke http://localhost:20128/v1` | 9router belum jalan |
 | `gagal menyambung ke Appium` | `appium` belum jalan, atau sesi Inspector masih terbuka |
-| `HP tidak terdeteksi oleh adb` | cek `adb devices`, izinkan USB debugging di HP |
-| `aplikasi ... tidak terpasang di HP` | pasang aplikasinya atau hapus skenarionya |
+| `HP tidak terdeteksi oleh adb` | kabel USB (kabel data), buka kunci layar, USB debugging masih aktif; cek `adb devices` |
+| `status 'unauthorized'` | buka kunci HP, ketuk Izinkan di dialog "Izinkan USB debugging?" |
+| `HP terdeteksi tapi 'offline'` | cabut-pasang kabel; kalau masih, `adb kill-server` |
+| `ada 2 perangkat terhubung ke adb` | cabut yang lain, atau isi `serial` di bagian `hp` pada aplikasi.json |
+| `aplikasi ... tidak terpasang di HP` | pasang aplikasinya atau hapus skenarionya (muncul hanya kalau HP terhubung) |
 | `observasi gagal di langkah 'login_...'` | lihat screenshot yang disebut; cek akun/sandi di akun.json |
 | `file akun tidak ditemukan` | salin `akun.contoh.json` menjadi `akun.json` |
 | `Google meminta kata sandi` (Wasiat) | masukkan dulu akun Google uji di HP lewat Setelan > Akun |
@@ -191,6 +209,6 @@ python tests/test_orkestrator.py
 ```
 
 Yang diuji antara lain: validasi rencana dan pemblokiran tombol berisiko, login form dan Google SSO, pemakaian
-ulang sesi login, pemberian izin lewat adb dan penanganan halaman Pengaturan sistem, perbaikan rencana yang ditolak validator, coba ulang saat HTTP 429, loop evaluator -> uji
+ulang sesi login, pemberian izin lewat adb, penanganan halaman Pengaturan sistem, Autostart Xiaomi, halaman izin di dalam aplikasi, mode jelajah menyeluruh, perbaikan rencana yang ditolak validator, coba ulang saat HTTP 429, loop evaluator -> uji
 ulang -> laporan, sensor data akun di teks dan gambar, frame rekaman untuk langkah lambat, serta laporan HTML/MD.
 Workflow n8n juga sudah dijalankan penuh di n8n 2.47.3 memakai `tests/orkestrator_sim.py`.
